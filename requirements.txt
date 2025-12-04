@@ -19,21 +19,25 @@ PyMuPDF>=1.23.0
 pdfplumber>=0.10.0
 
 # ===================================
-# Optional AI dependencies
-# Uncomment if using AI features
+# AI/LLM dependencies (for enhanced analysis)
 # ===================================
 
 # Embeddings (for semantic search)
-# sentence-transformers>=2.2.0
+sentence-transformers>=2.2.0
 
 # Vector store (for fast similarity search)
-# faiss-cpu>=1.7.4
+faiss-cpu>=1.7.4
+
+# LLM integration (for AI-powered compliance analysis)
+openai>=1.0.0
+
+# ===================================
+# Optional dependencies
+# Uncomment if needed
+# ===================================
 
 # Near-duplicate detection (alternative to fuzzy matching)
 # datasketch>=1.6.0
-
-# LLM integration (for AI-powered analysis)
-# openai>=1.0.0
 
 # Encoding detection (auto-detect file encodings)
 # chardet>=5.0.0

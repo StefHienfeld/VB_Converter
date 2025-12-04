@@ -51,6 +51,27 @@ def main():
     with col_input:
         uploaded_file = view.render_policy_file_uploader()
         use_conditions, uploaded_conditions = view.render_conditions_uploader()
+        
+        # Clause library upload (for sanering/standardization)
+        uploaded_clause_library = view.render_clause_library_uploader()
+        
+        # Load clause library if provided
+        if uploaded_clause_library:
+            if 'clause_library_loaded' not in st.session_state or st.session_state.clause_library_file != uploaded_clause_library.name:
+                try:
+                    num_clauses = controller.load_clause_library(
+                        uploaded_clause_library.getvalue(),
+                        uploaded_clause_library.name
+                    )
+                    st.session_state.clause_library_loaded = True
+                    st.session_state.clause_library_file = uploaded_clause_library.name
+                except Exception as e:
+                    view.render_error(f"Fout bij laden clausulebibliotheek: {str(e)}")
+            
+            # Show clause library stats
+            if st.session_state.get('clause_library_loaded'):
+                view.render_clause_library_stats(controller.get_clause_library_stats())
+        
         extra_instruction = view.render_extra_instruction()
         
         # Start button

@@ -1,11 +1,14 @@
 # hienfeld/services/similarity_service.py
 """
 Service for computing text similarity.
-Provides multiple implementations (RapidFuzz, difflib, MinHash).
+Provides multiple implementations (RapidFuzz, difflib, MinHash, Semantic).
 """
-from typing import Protocol, Optional
+from typing import Protocol, Optional, List, Tuple, Dict, Any
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 import difflib
+
+import numpy as np
 
 
 class SimilarityService(Protocol):
@@ -247,6 +250,265 @@ class MinHashLSHSimilarityService:
         return self._available
 
 
+@dataclass
+class SemanticMatch:
+    """
+    Result of a semantic similarity match.
+    
+    Attributes:
+        text_id: Identifier of the matched text
+        score: Similarity score (0.0 to 1.0)
+        matched_text: The original text that was matched
+        metadata: Additional metadata about the match
+    """
+    text_id: str
+    score: float
+    matched_text: str
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class SemanticSimilarityService:
+    """
+    Similarity service using embeddings for semantic comparison.
+    
+    Compares texts based on MEANING rather than exact wording.
+    Uses sentence-transformers to generate embeddings and cosine
+    similarity to compare them.
+    
+    Example:
+        "Kosten gedwongen evacuatie" and "Dekking bij noodgedwongen evacuatie"
+        have different words but same meaning -> high semantic similarity.
+    """
+    
+    # Default threshold for semantic match
+    DEFAULT_THRESHOLD = 0.70
+    
+    def __init__(
+        self,
+        threshold: float = DEFAULT_THRESHOLD,
+        embeddings_service: Optional[Any] = None,
+        model_name: str = "all-MiniLM-L6-v2"
+    ):
+        """
+        Initialize semantic similarity service.
+        
+        Args:
+            threshold: Minimum similarity for a match (0.0 to 1.0)
+            embeddings_service: Optional pre-configured embeddings service
+            model_name: Model to use if creating new embeddings service
+        """
+        self.threshold = threshold
+        self.model_name = model_name
+        self._embeddings_service = embeddings_service
+        self._available = False
+        
+        # Index storage for pre-computed embeddings
+        self._indexed_texts: Dict[str, str] = {}  # id -> text
+        self._indexed_embeddings: Optional[np.ndarray] = None  # shape: (n, dim)
+        self._indexed_ids: List[str] = []  # ordered list of IDs
+        self._indexed_metadata: Dict[str, Dict[str, Any]] = {}  # id -> metadata
+        
+        # Try to initialize
+        self._init_embeddings_service()
+    
+    def _init_embeddings_service(self) -> None:
+        """Initialize or validate the embeddings service."""
+        if self._embeddings_service is not None:
+            self._available = True
+            return
+        
+        try:
+            from .ai.embeddings_service import SentenceTransformerEmbeddingsService
+            self._embeddings_service = SentenceTransformerEmbeddingsService(
+                model_name=self.model_name
+            )
+            self._available = True
+        except ImportError:
+            self._available = False
+    
+    def similarity(self, a: str, b: str) -> float:
+        """
+        Compute semantic similarity between two strings.
+        
+        Uses cosine similarity of embeddings to measure how similar
+        the MEANING of two texts is.
+        
+        Args:
+            a: First string
+            b: Second string
+            
+        Returns:
+            Semantic similarity score between 0.0 and 1.0
+        """
+        if not self._available or not a or not b:
+            return 0.0
+        
+        try:
+            # Generate embeddings for both texts
+            emb_a = self._embeddings_service.embed_single(a)
+            emb_b = self._embeddings_service.embed_single(b)
+            
+            # Compute cosine similarity
+            return self._cosine_similarity(emb_a, emb_b)
+        except Exception:
+            return 0.0
+    
+    def is_similar(self, a: str, b: str) -> bool:
+        """
+        Check if two strings are semantically similar.
+        
+        Args:
+            a: First string
+            b: Second string
+            
+        Returns:
+            True if semantic similarity >= threshold
+        """
+        return self.similarity(a, b) >= self.threshold
+    
+    def index_texts(
+        self, 
+        texts: Dict[str, str],
+        metadata: Optional[Dict[str, Dict[str, Any]]] = None
+    ) -> None:
+        """
+        Index multiple texts for fast similarity search.
+        
+        Pre-computes embeddings for all texts so that queries are fast.
+        
+        Args:
+            texts: Dictionary mapping id -> text
+            metadata: Optional dictionary mapping id -> metadata dict
+        """
+        if not self._available or not texts:
+            return
+        
+        self._indexed_texts = texts.copy()
+        self._indexed_ids = list(texts.keys())
+        self._indexed_metadata = metadata or {}
+        
+        # Generate embeddings for all texts
+        text_list = [texts[tid] for tid in self._indexed_ids]
+        self._indexed_embeddings = self._embeddings_service.embed_texts(text_list)
+    
+    def find_similar(
+        self, 
+        query_text: str, 
+        top_k: int = 5,
+        min_score: float = None
+    ) -> List[SemanticMatch]:
+        """
+        Find semantically similar texts from the index.
+        
+        Args:
+            query_text: Text to search for
+            top_k: Maximum number of results
+            min_score: Minimum similarity score (defaults to threshold)
+            
+        Returns:
+            List of SemanticMatch objects, sorted by score descending
+        """
+        if not self._available or self._indexed_embeddings is None:
+            return []
+        
+        min_score = min_score if min_score is not None else self.threshold
+        
+        # Generate query embedding
+        query_embedding = self._embeddings_service.embed_single(query_text)
+        
+        # Compute similarities with all indexed texts
+        similarities = self._cosine_similarity_batch(
+            query_embedding, 
+            self._indexed_embeddings
+        )
+        
+        # Get top-k results above threshold
+        results = []
+        sorted_indices = np.argsort(similarities)[::-1]  # Descending
+        
+        for idx in sorted_indices[:top_k]:
+            score = float(similarities[idx])
+            if score < min_score:
+                break
+            
+            text_id = self._indexed_ids[idx]
+            results.append(SemanticMatch(
+                text_id=text_id,
+                score=score,
+                matched_text=self._indexed_texts[text_id],
+                metadata=self._indexed_metadata.get(text_id)
+            ))
+        
+        return results
+    
+    def find_best_match(
+        self, 
+        query_text: str,
+        min_score: float = None
+    ) -> Optional[SemanticMatch]:
+        """
+        Find the single best semantic match.
+        
+        Args:
+            query_text: Text to search for
+            min_score: Minimum similarity score
+            
+        Returns:
+            Best SemanticMatch or None if no match above threshold
+        """
+        matches = self.find_similar(query_text, top_k=1, min_score=min_score)
+        return matches[0] if matches else None
+    
+    def _cosine_similarity(self, a: np.ndarray, b: np.ndarray) -> float:
+        """Compute cosine similarity between two vectors."""
+        dot_product = np.dot(a, b)
+        norm_a = np.linalg.norm(a)
+        norm_b = np.linalg.norm(b)
+        
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        
+        return float(dot_product / (norm_a * norm_b))
+    
+    def _cosine_similarity_batch(
+        self, 
+        query: np.ndarray, 
+        corpus: np.ndarray
+    ) -> np.ndarray:
+        """Compute cosine similarity between query and all corpus vectors."""
+        # Normalize query
+        query_norm = query / (np.linalg.norm(query) + 1e-10)
+        
+        # Normalize corpus (row-wise)
+        corpus_norms = np.linalg.norm(corpus, axis=1, keepdims=True) + 1e-10
+        corpus_normalized = corpus / corpus_norms
+        
+        # Dot product gives cosine similarity for normalized vectors
+        return np.dot(corpus_normalized, query_norm)
+    
+    def clear_index(self) -> None:
+        """Clear the indexed texts."""
+        self._indexed_texts = {}
+        self._indexed_embeddings = None
+        self._indexed_ids = []
+        self._indexed_metadata = {}
+    
+    @property
+    def is_available(self) -> bool:
+        """Check if semantic similarity is available."""
+        return self._available
+    
+    @property
+    def is_indexed(self) -> bool:
+        """Check if texts have been indexed."""
+        return self._indexed_embeddings is not None and len(self._indexed_ids) > 0
+    
+    @property
+    def index_size(self) -> int:
+        """Get number of indexed texts."""
+        return len(self._indexed_ids)
+
+
 def create_similarity_service(
     method: str = "rapidfuzz",
     threshold: float = 0.9,
@@ -256,14 +518,16 @@ def create_similarity_service(
     Factory function to create appropriate similarity service.
     
     Args:
-        method: "rapidfuzz", "difflib", or "minhash"
+        method: "rapidfuzz", "difflib", "minhash", or "semantic"
         threshold: Similarity threshold
         **kwargs: Additional arguments for specific services
         
     Returns:
         SimilarityService instance
     """
-    if method == "minhash":
+    if method == "semantic":
+        return SemanticSimilarityService(threshold=threshold, **kwargs)
+    elif method == "minhash":
         return MinHashLSHSimilarityService(threshold=threshold, **kwargs)
     elif method == "rapidfuzz":
         return RapidFuzzSimilarityService(threshold=threshold)

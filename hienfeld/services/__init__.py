@@ -7,6 +7,8 @@ from .clustering_service import ClusteringService
 from .similarity_service import SimilarityService, RapidFuzzSimilarityService, DifflibSimilarityService
 from .analysis_service import AnalysisService
 from .export_service import ExportService
+from .clause_library_service import ClauseLibraryService
+from .admin_check_service import AdminCheckService
 
 __all__ = [
     'IngestionService',
@@ -18,6 +20,8 @@ __all__ = [
     'RapidFuzzSimilarityService',
     'DifflibSimilarityService',
     'AnalysisService',
-    'ExportService'
+    'ExportService',
+    'ClauseLibraryService',
+    'AdminCheckService'
 ]
 

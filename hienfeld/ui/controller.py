@@ -11,7 +11,9 @@ from ..domain.clause import Clause
 from ..domain.cluster import Cluster
 from ..domain.policy_document import PolicyDocumentSection
 from ..domain.analysis import AnalysisAdvice
+from ..domain.standard_clause import StandardClause, ClauseLibraryMatch
 from ..services.ingestion_service import IngestionService
+from ..services.clause_library_service import ClauseLibraryService
 from ..services.preprocessing_service import PreprocessingService
 from ..services.policy_parser_service import PolicyParserService
 from ..services.multi_clause_service import MultiClauseDetectionService
@@ -19,6 +21,7 @@ from ..services.clustering_service import ClusteringService
 from ..services.analysis_service import AnalysisService
 from ..services.export_service import ExportService
 from ..services.similarity_service import RapidFuzzSimilarityService
+from ..services.admin_check_service import AdminCheckService
 from ..logging_config import get_logger
 
 logger = get_logger('controller')
@@ -70,6 +73,7 @@ class HienfeldController:
         self.clustering_service = clustering_service or ClusteringService(config)
         self.analysis_service = analysis_service or AnalysisService(config)
         self.export_service = export_service or ExportService(config)
+        self.clause_library_service = ClauseLibraryService(config)
         
         # State
         self.df: Optional[pd.DataFrame] = None
@@ -127,6 +131,34 @@ class HienfeldController:
         self.policy_sections = sections
         logger.info(f"Parsed {len(sections)} total sections")
         return sections
+    
+    def load_clause_library(self, file_bytes: bytes, filename: str) -> int:
+        """
+        Load a clause library file for sanering.
+        
+        Args:
+            file_bytes: Raw bytes of the CSV/Excel file
+            filename: Original filename
+            
+        Returns:
+            Number of clauses loaded
+        """
+        logger.info(f"Loading clause library: {filename}")
+        count = self.clause_library_service.load_from_file(file_bytes, filename)
+        
+        # Connect clause library service to analysis service for waterfall pipeline
+        self.analysis_service.set_clause_library_service(self.clause_library_service)
+        
+        return count
+    
+    def get_clause_library_stats(self) -> dict:
+        """
+        Get statistics about the loaded clause library.
+        
+        Returns:
+            Dictionary with clause library statistics
+        """
+        return self.clause_library_service.get_statistics()
     
     def run_analysis(
         self,
@@ -339,7 +371,16 @@ def create_controller(config: Optional[AppConfig] = None) -> HienfeldController:
     policy_parser = PolicyParserService(config)
     multi_clause = MultiClauseDetectionService(config)
     clustering = ClusteringService(config, similarity_service=similarity_service)
-    analysis = AnalysisService(config)
+    
+    # Create admin check service (Step 0 in pipeline)
+    admin_check = AdminCheckService(
+        config=config,
+        llm_client=None,  # Can be configured later
+        enable_ai_checks=False  # Only simple checks by default
+    )
+    
+    # Create analysis service with admin check
+    analysis = AnalysisService(config, admin_check_service=admin_check)
     export = ExportService(config)
     
     return HienfeldController(

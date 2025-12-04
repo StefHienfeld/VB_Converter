@@ -54,13 +54,20 @@ class SentenceTransformerEmbeddingsService:
     """
     Embedding service using sentence-transformers library.
     
-    Provides high-quality multilingual embeddings suitable for
-    Dutch policy text.
+    Provides high-quality embeddings for semantic similarity.
+    
+    For Dutch texts, the multilingual model is recommended but requires more resources.
+    The default model (all-MiniLM-L6-v2) is smaller and faster but optimized for English.
     """
+    
+    # Model options:
+    # - "all-MiniLM-L6-v2" - Fast, small (~90MB), English-optimized
+    # - "paraphrase-multilingual-MiniLM-L12-v2" - Good for Dutch (~470MB)
+    # - "distiluse-base-multilingual-cased-v1" - Multilingual (~540MB)
     
     def __init__(
         self, 
-        model_name: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        model_name: str = "all-MiniLM-L6-v2"
     ):
         """
         Initialize with a sentence-transformers model.

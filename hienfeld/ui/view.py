@@ -159,6 +159,38 @@ class HienfeldView:
                     padding: 0.2rem 0.5rem;
                     border-radius: 3px;
                 }
+                
+                /* Administrative/Hygiene advice badges (Step 0) */
+                .advice-opschonen {
+                    background-color: #6f42c1;
+                    color: white;
+                    padding: 0.2rem 0.5rem;
+                    border-radius: 3px;
+                }
+                .advice-aanvullen {
+                    background-color: #fd7e14;
+                    color: white;
+                    padding: 0.2rem 0.5rem;
+                    border-radius: 3px;
+                }
+                .advice-verlopen {
+                    background-color: #6c757d;
+                    color: white;
+                    padding: 0.2rem 0.5rem;
+                    border-radius: 3px;
+                }
+                .advice-leeg {
+                    background-color: #adb5bd;
+                    color: #333;
+                    padding: 0.2rem 0.5rem;
+                    border-radius: 3px;
+                }
+                .advice-onleesbaar {
+                    background-color: #343a40;
+                    color: white;
+                    padding: 0.2rem 0.5rem;
+                    border-radius: 3px;
+                }
             </style>
         """, unsafe_allow_html=True)
     
@@ -331,6 +363,72 @@ class HienfeldView:
         st.markdown('</div>', unsafe_allow_html=True)
         return use_conditions, conditions or []
     
+    def render_clause_library_uploader(self) -> Optional[Any]:
+        """
+        Render the clause library upload widget.
+        
+        The clause library contains standard clauses with codes that can be
+        used to replace similar free text clauses (sanering).
+        
+        Returns:
+            Uploaded file object or None
+        """
+        st.markdown('<div class="hienfeld-card">', unsafe_allow_html=True)
+        st.subheader("📚 2b. Clausulebibliotheek (Optioneel)")
+        
+        with st.expander("ℹ️ Wat is de clausulebibliotheek?", expanded=False):
+            st.markdown("""
+            De clausulebibliotheek bevat **standaardclausules met codes** (bijv. 9NX3, VB12).
+            
+            **Hoe werkt het?**
+            1. Upload een bestand met standaardclausules (CSV/Excel/PDF/Word)
+            2. De tool vergelijkt vrije teksten tegen deze standaardclausules
+            3. Bij een match krijg je advies: "Vervang door clausule [CODE]"
+            
+            **Bestandsformaten:**
+            - **CSV/Excel**: Kolommen `Code`, `Tekst`, `Categorie` (optioneel)
+            - **PDF/Word**: Automatische extractie van clausulecodes (patroon: cijfer + 2 letters + cijfer, bijv. 9NX3)
+            
+            **Voor PDF/Word:**
+            De tool zoekt automatisch naar clausulecodes en extraheert de tekst bij elke code.
+            Zorg dat codes duidelijk zichtbaar zijn (bijv. "9NX3" of "Clausule 9NX3:").
+            """)
+        
+        clause_file = st.file_uploader(
+            "Upload clausulebibliotheek (CSV/Excel/PDF/Word)",
+            type=['csv', 'xlsx', 'xls', 'pdf', 'docx'],
+            help="Upload een bestand met standaardclausules. CSV/Excel: kolommen Code/Tekst. PDF/Word: automatische extractie.",
+            key="clause_library_uploader"
+        )
+        
+        if clause_file:
+            st.success(f"✅ Clausulebibliotheek geladen: {clause_file.name}")
+        else:
+            st.info("💡 Zonder clausulebibliotheek kan de tool niet adviseren welke standaardcode te gebruiken.")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        return clause_file
+    
+    def render_clause_library_stats(self, stats: dict):
+        """
+        Render statistics about the loaded clause library.
+        
+        Args:
+            stats: Dictionary with clause library statistics
+        """
+        if not stats.get('is_loaded', False):
+            return
+        
+        total = stats.get('total_clauses', 0)
+        categories = stats.get('categories', {})
+        
+        st.markdown("**📊 Clausulebibliotheek:**")
+        st.write(f"• {total} standaardclausules geladen")
+        
+        if categories:
+            cat_list = ", ".join([f"{cat} ({count})" for cat, count in categories.items()])
+            st.write(f"• Categorieën: {cat_list}")
+    
     def render_extra_instruction(self) -> str:
         """
         Render the extra instruction input.
@@ -401,6 +499,12 @@ class HienfeldView:
             - ⚠️ SPLITSEN (meerdere clausules)
             - 🛠️ STANDAARDISEREN (vaak voorkomend)
             - 🔒 BEHOUDEN (afwijking)
+            
+            **Administratief (Stap 0):**
+            - 🧹 OPSCHONEN (encoding-fouten)
+            - 📝 AANVULLEN (placeholders, incompleet)
+            - 📅 VERLOPEN (datum in verleden)
+            - ⚪ LEEG (geen inhoud)
             """)
         
         with col2:
@@ -467,9 +571,18 @@ class HienfeldView:
         standaardiseren_count = advice_dist.get('🛠️ STANDAARDISEREN', 0)
         uniek_count = advice_dist.get('✨ UNIEK', 0)
         
+        # Count admin issues (Step 0)
+        admin_issues_count = (
+            advice_dist.get('🧹 OPSCHONEN', 0) +
+            advice_dist.get('📝 AANVULLEN', 0) +
+            advice_dist.get('📅 VERWIJDEREN (VERLOPEN)', 0) +
+            advice_dist.get('⚪ LEEG', 0) +
+            advice_dist.get('❌ ONLEESBAAR', 0)
+        )
+        
         if analysis_mode == 'with_conditions':
             # Mode WITH conditions - show verwijderen count
-            col1, col2, col3, col4, col5 = st.columns(5)
+            col1, col2, col3, col4, col5, col6 = st.columns(6)
             
             with col1:
                 st.markdown(f"""
@@ -508,6 +621,14 @@ class HienfeldView:
                     <div class="metric-card">
                         <div class="metric-value" style="color: #ffc107;">{stats.get('multi_clause_count', 0)}</div>
                         <div class="metric-label">⚠️ Te Splitsen</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            with col6:
+                st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-value" style="color: #6f42c1;">{admin_issues_count}</div>
+                        <div class="metric-label">🧹 Admin Issues</div>
                     </div>
                 """, unsafe_allow_html=True)
         
