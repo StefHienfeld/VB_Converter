@@ -1,8 +1,8 @@
 # Hienfeld VB Converter - Requirements
 # Core dependencies
 
-# Web framework
-streamlit>=1.28.0
+# Web framework (Reflex - full-stack Python framework)
+reflex>=0.6.0
 
 # Data processing
 pandas>=2.0.0

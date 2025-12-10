@@ -58,10 +58,10 @@ class AnalysisService:
     └─────────────────────────────────────────────────────────────┘
     """
     
-    # Thresholds for matching
-    EXACT_MATCH_THRESHOLD = 0.95      # Almost identical -> REPLACE/DELETE
-    HIGH_SIMILARITY_THRESHOLD = 0.85   # Very similar -> REVIEW
-    MEDIUM_SIMILARITY_THRESHOLD = 0.75 # Similar -> POSSIBLE MATCH
+    # Thresholds for matching - LOWERED for better detection
+    EXACT_MATCH_THRESHOLD = 0.90      # Almost identical -> REPLACE/DELETE (was 0.95)
+    HIGH_SIMILARITY_THRESHOLD = 0.80   # Very similar -> REVIEW (was 0.85)
+    MEDIUM_SIMILARITY_THRESHOLD = 0.70 # Similar -> POSSIBLE MATCH (was 0.75)
     
     # Semantic similarity thresholds
     SEMANTIC_MATCH_THRESHOLD = 0.70   # Threshold for semantic similarity (embeddings)
@@ -259,6 +259,62 @@ class AnalysisService:
         self._log_analysis_summary(advice_map, stats)
         
         return advice_map
+    
+    def analyze_text_segment(
+        self,
+        text: str,
+        segment_id: str,
+        cluster_name: str = "",
+        frequency: int = 1,
+        policy_sections: Optional[List[PolicyDocumentSection]] = None
+    ) -> AnalysisAdvice:
+        """
+        Analyze a single text segment (for sub-clause analysis).
+        
+        Creates a temporary cluster and analyzes it using the waterfall pipeline.
+        
+        Args:
+            text: Text segment to analyze
+            segment_id: Unique identifier for this segment
+            cluster_name: Optional cluster name
+            frequency: Frequency (default 1 for segments)
+            policy_sections: Optional policy sections for context (uses stored if not provided)
+            
+        Returns:
+            AnalysisAdvice for this segment
+        """
+        from ..domain.clause import Clause
+        
+        # Create temporary clause
+        temp_clause = Clause(
+            id=segment_id,
+            raw_text=text,
+            simplified_text=simplify_text(text)
+        )
+        
+        # Create temporary cluster
+        temp_cluster = Cluster(
+            id=segment_id,
+            leader_clause=temp_clause,
+            member_ids=[],
+            frequency=frequency,
+            name=cluster_name or f"Segment {segment_id}"
+        )
+        
+        # Use provided policy sections or stored ones
+        if policy_sections is None:
+            policy_sections = self._policy_sections
+        
+        # Analyze using waterfall pipeline (without stats tracking)
+        stats = {
+            'step0_admin_issues': 0,
+            'step1_library_match': 0,
+            'step2_conditions_match': 0,
+            'step3_fallback': 0,
+            'multi_clause': 0
+        }
+        
+        return self._analyze_with_waterfall(temp_cluster, stats)
     
     def _analyze_with_waterfall(
         self, 

@@ -145,3 +145,124 @@ def truncate_text(text: str, max_length: int = 100, suffix: str = "...") -> str:
         return text or ""
     return text[:max_length - len(suffix)] + suffix
 
+
+def normalize_for_clustering(text: str) -> str:
+    """
+    Aggressively normalize text for clustering by replacing variable parts.
+    
+    This function replaces addresses, monetary amounts, dates, policy numbers,
+    and other variable content with placeholders so that similar clauses
+    can be clustered together even when they differ in these details.
+    
+    Args:
+        text: Input text to normalize
+        
+    Returns:
+        Normalized text with placeholders for variable parts
+    """
+    if not text:
+        return ""
+    
+    # Start with basic simplification
+    normalized = simplify_text(text)
+    
+    # Replace monetary amounts (€ 50.000, EUR 100.000,00, etc.)
+    normalized = re.sub(
+        r'(?:€|eur|euro)\s*[\d.,]+(?:\s*(?:miljoen|duizend))?',
+        '[BEDRAG]',
+        normalized,
+        flags=re.IGNORECASE
+    )
+    
+    # Replace standalone currency amounts
+    normalized = re.sub(
+        r'\b\d{1,3}(?:\.\d{3})*(?:,\d{2})?\s*(?:euro|€)',
+        '[BEDRAG]',
+        normalized,
+        flags=re.IGNORECASE
+    )
+    
+    # Replace percentage values
+    normalized = re.sub(
+        r'\b\d+(?:[.,]\d+)?\s*%',
+        '[PERCENTAGE]',
+        normalized
+    )
+    
+    # Replace dates (various formats)
+    # DD-MM-YYYY, DD/MM/YYYY, DD.MM.YYYY
+    normalized = re.sub(
+        r'\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b',
+        '[DATUM]',
+        normalized
+    )
+    # "1 januari 2020" format
+    maanden = 'januari|februari|maart|april|mei|juni|juli|augustus|september|oktober|november|december'
+    normalized = re.sub(
+        rf'\b\d{{1,2}}\s+(?:{maanden})\s+\d{{2,4}}\b',
+        '[DATUM]',
+        normalized,
+        flags=re.IGNORECASE
+    )
+    
+    # Replace postal codes (Dutch: 1234 AB)
+    normalized = re.sub(
+        r'\b\d{4}\s*[a-z]{2}\b',
+        '[POSTCODE]',
+        normalized,
+        flags=re.IGNORECASE
+    )
+    
+    # Replace house numbers with potential additions
+    normalized = re.sub(
+        r'\b\d+(?:\s*[-/]\s*\d+)?(?:\s*[a-z])?\b(?=\s+te\s|\s+[a-z]+$)',
+        '[HUISNR]',
+        normalized,
+        flags=re.IGNORECASE
+    )
+    
+    # Replace policy numbers (common patterns)
+    normalized = re.sub(
+        r'\b(?:dl|ren|pol|polis)\d{5,10}[a-z]?\b',
+        '[POLISNR]',
+        normalized,
+        flags=re.IGNORECASE
+    )
+    
+    # Replace phone numbers
+    normalized = re.sub(
+        r'\b(?:\+31|0)\s*(?:\d[\s-]*){9,10}\b',
+        '[TELEFOON]',
+        normalized
+    )
+    
+    # Replace email addresses
+    normalized = re.sub(
+        r'\b[\w.-]+@[\w.-]+\.\w+\b',
+        '[EMAIL]',
+        normalized
+    )
+    
+    # Replace specific article/item numbers in lists (nr. 1, item 42, etc.)
+    normalized = re.sub(
+        r'\b(?:nr|item|nummer|pos)\.?\s*\d+\b',
+        '[ITEMNR]',
+        normalized,
+        flags=re.IGNORECASE
+    )
+    
+    # Replace standalone numbers that are likely reference numbers (5+ digits)
+    normalized = re.sub(
+        r'\b\d{5,}\b',
+        '[REFNR]',
+        normalized
+    )
+    
+    # Normalize multiple consecutive placeholders
+    normalized = re.sub(r'\[BEDRAG\](?:\s*\[BEDRAG\])+', '[BEDRAG]', normalized)
+    normalized = re.sub(r'\[DATUM\](?:\s*\[DATUM\])+', '[DATUM]', normalized)
+    
+    # Final whitespace normalization
+    normalized = normalize_whitespace(normalized)
+    
+    return normalized

@@ -206,16 +206,30 @@ class AdminCheckService:
                 details=encoding_match.group()
             )
         
-        # Check 5: Dates in the past
+        # Check 5: Dates in the past (only expiry dates and old taxaties)
         past_date = self._find_past_date(text)
         if past_date:
             date_str, parsed_date = past_date
-            return AdminCheckResult.with_issue(
-                issue_type=AdminIssueType.VEROUDERD,
-                description=f"Tekst verwijst naar datum in het verleden: {date_str}",
-                recommendation=AdviceCode.VERWIJDEREN_VERLOPEN,
-                details=date_str
-            )
+            text_lower = text.lower()
+            
+            # Check if it's a taxatie date (special handling)
+            taxatie_keywords = ['taxatie', 'rapport', 'waardebepaling', '7:960', 'getaxeerd']
+            is_taxatie = any(kw in text_lower for kw in taxatie_keywords)
+            
+            if is_taxatie:
+                return AdminCheckResult.with_issue(
+                    issue_type=AdminIssueType.VEROUDERD,
+                    description=f"Taxatierapport ouder dan 3 jaar ({date_str}). Controleer of hertaxatie nodig is.",
+                    recommendation=AdviceCode.HANDMATIG_CHECKEN,  # Suggest check, not delete
+                    details=date_str
+                )
+            else:
+                return AdminCheckResult.with_issue(
+                    issue_type=AdminIssueType.VEROUDERD,
+                    description=f"Verlopen deadline/termijn gevonden: {date_str}",
+                    recommendation=AdviceCode.VERWIJDEREN_VERLOPEN,
+                    details=date_str
+                )
         
         # All simple checks passed
         result.passed_simple_checks = True
@@ -223,12 +237,27 @@ class AdminCheckService:
     
     def _find_past_date(self, text: str) -> Optional[Tuple[str, datetime]]:
         """
-        Find dates in the text that are in the past.
+        Find dates in the text that are in the past, with context-aware validation.
+        
+        IMPROVED v2.1: Much more conservative - only flags actual deadlines/expiry dates.
+        
+        Uses context windows to determine if a past date is actually problematic:
+        - WHITELIST (never flag):
+          - Reference dates (specificatie, d.d., Christie's, overzicht, lijst)
+          - Birth dates (geboren, geboortedatum)
+          - Legal references (Wet van, artikel, BW)
+          - Taxatie dates (< 3 years = valid)
+        - GREYLIST (informational only):
+          - Taxatie dates (> 3 years) -> suggest review, not delete
+          - Version/model references
+        - BLACKLIST (flag as problematic):
+          - Actual expiry dates (uiterlijk, geldig tot, vervalt per) in the past
         
         Returns:
-            Tuple of (date_string, parsed_date) if found, None otherwise
+            Tuple of (date_string, parsed_date) if problematic date found, None otherwise
         """
         today = datetime.now()
+        current_year = today.year
         text_lower = text.lower()
         
         for pattern in self.DATE_PATTERNS:
@@ -240,11 +269,106 @@ class AdminCheckService:
                     parsed_date = self._parse_date(match, pattern)
                     
                     if parsed_date and parsed_date < today:
-                        # Additional check: only flag if clearly in the past (>1 year ago)
-                        # This avoids flagging dates that might be renewal dates etc.
-                        days_ago = (today - parsed_date).days
-                        if days_ago > 365:  # More than 1 year ago
+                        # Get context window (100 chars before and after for better context)
+                        match_start = match.start()
+                        match_end = match.end()
+                        context_start = max(0, match_start - 100)
+                        context_end = min(len(text), match_end + 100)
+                        context_snippet = text_lower[context_start:context_end]
+                        
+                        # Calculate age
+                        date_year = parsed_date.year
+                        age_in_years = current_year - date_year
+                        
+                        # ============================================================
+                        # WHITELIST 1: Reference dates (specificatie, d.d., etc.)
+                        # These are NEVER problematic - they reference when something
+                        # was created/documented, not when it expires
+                        # ============================================================
+                        reference_keywords = [
+                            'd.d.', 'specificatie', 'christie', 'sotheby', 'overzicht',
+                            'lijst', 'conform', 'volgens', 'ontvangen op', 'opgesteld',
+                            'gedateerd', 'de dato', 'dd.', 'dd ', 'per datum'
+                        ]
+                        if any(kw in context_snippet for kw in reference_keywords):
+                            logger.debug(f"Date {date_str} is a reference date, skipping")
+                            continue
+                        
+                        # ============================================================
+                        # WHITELIST 2: Birth dates (never expire)
+                        # ============================================================
+                        birth_keywords = [
+                            'geboren', 'geboortedatum', 'geboorte', 'birth', 'dob'
+                        ]
+                        if any(kw in context_snippet for kw in birth_keywords):
+                            logger.debug(f"Date {date_str} is a birth date, skipping")
+                            continue
+                        
+                        # ============================================================
+                        # WHITELIST 3: Legal/law references (never expire)
+                        # ============================================================
+                        legal_keywords = [
+                            'wet van', 'wetgeving', 'staatsblad', 'artikel', 'bw',
+                            'burgerlijk wetboek', 'wft', 'awb', 'besluit', 'regeling',
+                            'richtlijn', 'verordening'
+                        ]
+                        if any(kw in context_snippet for kw in legal_keywords):
+                            logger.debug(f"Date {date_str} is a legal reference, skipping")
+                            continue
+                        
+                        # ============================================================
+                        # WHITELIST 4: Taxatie/rapport dates (valid for 3 years)
+                        # ============================================================
+                        taxatie_keywords = [
+                            'taxatie', 'rapport', 'waardebepaling', 'deskundige',
+                            '7:960', 'taxatierapport', 'taxatiedatum', 'getaxeerd',
+                            'hertaxatie', 'waardering'
+                        ]
+                        if any(kw in context_snippet for kw in taxatie_keywords):
+                            if age_in_years <= 3:
+                                # Taxatie is still valid (< 3 years)
+                                logger.debug(f"Date {date_str} in taxatie context, still valid (age: {age_in_years} years)")
+                                continue
+                            else:
+                                # Taxatie > 3 years old - this IS a problem for taxaties
+                                logger.info(f"Taxatie date {date_str} is > 3 years old (age: {age_in_years} years)")
+                                return (date_str, parsed_date)
+                        
+                        # ============================================================
+                        # WHITELIST 5: Version/model/voorwaarden references
+                        # These reference document versions, not expiry dates
+                        # ============================================================
+                        version_keywords = [
+                            'versie', 'model', 'gedeponeerd', 'kenmerk', 'voorwaarden',
+                            'clausuleblad', 'depot', 'ingediend', 'polisvoorwaarden',
+                            'algemene voorwaarden', 'van toepassing'
+                        ]
+                        if any(kw in context_snippet for kw in version_keywords):
+                            logger.debug(f"Date {date_str} is a version reference, skipping")
+                            continue
+                        
+                        # ============================================================
+                        # BLACKLIST: Actual expiry/deadline dates = CRITICAL
+                        # Only these should be flagged as problematic
+                        # ============================================================
+                        expiry_keywords = [
+                            'uiterlijk', 'voor ', 'dient te zijn', 'operationeel',
+                            'einddatum', 'vervalt per', 'geldig tot', 'geldig tot en met',
+                            'looptijd tot', 'vervaldatum', 'eindigt op', 'tot uiterlijk',
+                            'ten laatste', 'deadline'
+                        ]
+                        if any(kw in context_snippet for kw in expiry_keywords):
+                            # This is an actual expiry/deadline date in the past - CRITICAL
+                            logger.warning(f"Expiry/deadline date {date_str} found in past (age: {age_in_years} years)")
                             return (date_str, parsed_date)
+                        
+                        # ============================================================
+                        # DEFAULT: Date in past without clear context
+                        # Be CONSERVATIVE - do NOT flag unless clearly problematic
+                        # ============================================================
+                        # Don't flag dates without clear expiry context
+                        logger.debug(f"Date {date_str} in past but no expiry context, skipping (age: {age_in_years} years)")
+                        continue
                             
                 except (ValueError, IndexError):
                     continue

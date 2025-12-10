@@ -400,3 +400,97 @@ class LLMAnalysisService:
         self.batch_size = batch_size
         self.batch_processor.batch_size = batch_size
         logger.info(f"Batch size updated to {batch_size}")
+    
+    def intelligent_split(self, text: str) -> List[str]:
+        """
+        Intelligently split a text into semantically separate clauses using LLM.
+        
+        This method splits text WITHOUT changing any words - it only cuts the text
+        at logical boundaries between separate legal provisions.
+        
+        Args:
+            text: Text to split
+            
+        Returns:
+            List of text segments (sub-clauses)
+        """
+        if self.client is None:
+            logger.warning("No LLM client configured, returning original text as single segment")
+            return [text]
+        
+        if not text or len(text.strip()) == 0:
+            return [text]
+        
+        try:
+            # Build prompt for splitting
+            prompt = self._build_split_prompt(text)
+            messages = [
+                {
+                    "role": "system",
+                    "content": """Je bent een tekst-editor voor juridische documenten. 
+Je taak is om lange teksten op te knippen in semantisch losstaande bepalingen.
+
+BELANGRIJK: Verander GEEN ENKEL WOORD. Knip alleen de tekst op logische punten.
+Je output moet een JSON array zijn met strings, waarbij elke string een deel van de originele tekst is."""
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+            
+            response = self._call_llm_chat(messages)
+            
+            # Parse JSON response
+            import json
+            # Try to extract JSON from response (might have markdown code blocks)
+            response_clean = response.strip()
+            if response_clean.startswith("```"):
+                # Remove markdown code blocks
+                response_clean = response_clean.split("```")[1]
+                if response_clean.startswith("json"):
+                    response_clean = response_clean[4:]
+                response_clean = response_clean.strip()
+            
+            segments = json.loads(response_clean)
+            
+            # Validate that segments are strings and non-empty
+            segments = [s.strip() for s in segments if isinstance(s, str) and s.strip()]
+            
+            if len(segments) == 0:
+                logger.warning("LLM returned empty segments, using original text")
+                return [text]
+            
+            logger.info(f"LLM split text into {len(segments)} segments")
+            return segments
+            
+        except Exception as e:
+            logger.error(f"LLM split failed: {e}")
+            # Fallback: return original text as single segment
+            return [text]
+    
+    def _build_split_prompt(self, text: str) -> str:
+        """
+        Build the prompt for intelligent text splitting.
+        
+        Args:
+            text: Text to split
+            
+        Returns:
+            Prompt string
+        """
+        return f"""Splits de volgende tekst in semantisch losstaande bepalingen.
+
+REGELS:
+1. Verander GEEN ENKEL WOORD - knip alleen op logische punten
+2. Elke segment moet een complete, zelfstandige bepaling zijn
+3. Behoud alle originele tekst - niets weglaten of toevoegen
+4. Geef een JSON array terug met strings
+
+Tekst om te splitsen:
+---
+{text}
+---
+
+Geef alleen de JSON array terug, zonder extra uitleg. Bijvoorbeeld:
+["Eerste bepaling tekst...", "Tweede bepaling tekst...", "Derde bepaling tekst..."]"""

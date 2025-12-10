@@ -6,7 +6,6 @@ Uses dataclasses for type-safe configuration management.
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 import os
-import json
 
 
 @dataclass
@@ -55,6 +54,7 @@ class AnalysisRuleConfig:
     conditions_match: ConditionsMatchConfig = field(default_factory=ConditionsMatchConfig)
     
     # Keyword rules mapping keywords to categories
+    # EXTENDED v2.1: More rules for common clause types
     keyword_rules: Dict[str, Dict] = field(default_factory=lambda: {
         'fraude': {
             'keywords': ['fraude', 'misleiding'],
@@ -79,6 +79,119 @@ class AnalysisRuleConfig:
             'reason': 'Afwijking: Voorwaarden sluiten Molest uit (Art 2.14), polis dekt het expliciet.',
             'article': 'Art 2.14',
             'confidence': 'Hoog'
+        },
+        # === NEW RULES v2.1 ===
+        'evacuatie': {
+            'keywords': ['evacuatie', 'noodgedwongen'],
+            'inclusion_keywords': ['verblijf', 'bevoegd gezag'],
+            'advice': 'HANDMATIG CHECKEN',
+            'reason': 'Evacuatieclausule - controleer of dekking afwijkt van voorwaarden.',
+            'article': '-',
+            'confidence': 'Midden'
+        },
+        'uitsluiting_kunst': {
+            'keywords': ['uitsluiting', 'uitgesloten'],
+            'inclusion_keywords': ['kunstvoorwerpen', 'kunst', 'antiek', 'kunstobjecten'],
+            'advice': 'BEHOUDEN (MAATWERK)',
+            'reason': 'Specifieke uitsluiting van kunstobjecten - polisspecifiek maatwerk.',
+            'article': '-',
+            'confidence': 'Hoog'
+        },
+        'braak_clausule': {
+            'keywords': ['braak'],
+            'inclusion_keywords': ['diefstal', 'inbraak'],
+            'advice': 'BEHOUDEN (CLAUSULE)',
+            'reason': 'Braakclausule - specifieke voorwaarde voor diefstal. Controleer of consistent met voorwaarden.',
+            'article': '-',
+            'confidence': 'Midden'
+        },
+        'vervangende_woonruimte': {
+            'keywords': ['vervangende woonruimte', 'verblijf elders'],
+            'advice': 'HANDMATIG CHECKEN',
+            'reason': 'Vervangende woonruimte clausule - vergelijk met Art 10 voorwaarden.',
+            'article': 'Art 10',
+            'confidence': 'Midden'
+        },
+        'juwelen_sieraden': {
+            'keywords': ['juwelen', 'sieraden', 'horloges', 'lijfsieraden'],
+            'inclusion_keywords': ['kluis', 'verzekerd', 'dekking'],
+            'advice': 'BEHOUDEN (MAATWERK)',
+            'reason': 'Specifieke juwelen/sieraden bepaling - vaak polisspecifiek maatwerk.',
+            'article': '-',
+            'confidence': 'Midden'
+        },
+        'alarm_beveiliging': {
+            'keywords': ['alarm', 'inbraakalarm', 'beveiligingsysteem'],
+            'inclusion_keywords': ['doormelding', 'pac', 'bewakingscentrale'],
+            'advice': 'BEHOUDEN (VERPLICHTING)',
+            'reason': 'Beveiligingsverplichting - controleer of eisen correct zijn vastgelegd.',
+            'article': '-',
+            'confidence': 'Midden'
+        },
+        'monumenten': {
+            'keywords': ['monument', 'monumentenlijst', 'rijksmonument'],
+            'advice': 'BEHOUDEN (MAATWERK)',
+            'reason': 'Monumentenclausule - specifieke bepalingen voor monumentenpanden.',
+            'article': '-',
+            'confidence': 'Hoog'
+        },
+        'secundaire_dekking': {
+            'keywords': ['secundaire dekking', 'secundaire verzekering', 'primaire verzekering'],
+            'advice': 'BEHOUDEN (CLAUSULE)',
+            'reason': 'Secundaire dekkingsclausule - regelt samenloop met andere verzekeringen.',
+            'article': '-',
+            'confidence': 'Hoog'
+        },
+        'buitenland': {
+            'keywords': ['buitenland', 'woonachtig in het buitenland', 'land van vestiging'],
+            'advice': 'BEHOUDEN (MAATWERK)',
+            'reason': 'Buitenlandclausule - specifieke bepalingen voor verzekerden in het buitenland.',
+            'article': '-',
+            'confidence': 'Midden'
+        },
+        'verhuur': {
+            'keywords': ['verhuur', 'verhuurd', 'huurder'],
+            'advice': 'BEHOUDEN (MAATWERK)',
+            'reason': 'Verhuurclausule - afwijkende voorwaarden bij verhuur. Controleer details.',
+            'article': '-',
+            'confidence': 'Midden'
+        },
+        'taxatie': {
+            'keywords': ['taxatie', 'taxatierapport', 'getaxeerd'],
+            'inclusion_keywords': ['7:960', 'herbouwwaarde', 'waarde'],
+            'advice': 'HANDMATIG CHECKEN',
+            'reason': 'Taxatieclausule - controleer of taxatie nog geldig is (max 3 jaar).',
+            'article': 'Art 7:960 BW',
+            'confidence': 'Midden'
+        },
+        'overdekking': {
+            'keywords': ['overdekking', 'automatisch gedekt'],
+            'advice': 'HANDMATIG CHECKEN',
+            'reason': 'Overdekkingsclausule - controleer percentage en voorwaarden.',
+            'article': '-',
+            'confidence': 'Midden'
+        },
+        'sanctie_wetgeving': {
+            'keywords': ['sanctie', 'sanctiewetgeving', 'sanctieland'],
+            'advice': 'VERWIJDEREN',
+            'reason': 'Standaard sanctiewetgeving - al opgenomen in voorwaarden (Art 7).',
+            'article': 'Art 7',
+            'confidence': 'Hoog'
+        },
+        'terrorisme': {
+            'keywords': ['terrorisme', 'nht'],
+            'advice': 'VERWIJDEREN',
+            'reason': 'Standaard terrorismeclausule via NHT - zie Clausuleblad Terrorismedekking.',
+            'article': 'Bijlage',
+            'confidence': 'Hoog'
+        },
+        'annulering': {
+            'keywords': ['annulering', 'annuleringskosten'],
+            'inclusion_keywords': ['reis', 'doorlopend'],
+            'advice': 'HANDMATIG CHECKEN',
+            'reason': 'Annuleringsclausule - controleer of bedragen/voorwaarden afwijken.',
+            'article': 'Art 9',
+            'confidence': 'Midden'
         }
     })
     
@@ -170,28 +283,4 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     Returns:
         AppConfig instance with loaded or default values
     """
-    if config_path and os.path.exists(config_path):
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config_dict = json.load(f)
-            # TODO: Implement proper deserialization from dict
-            # For now, return defaults
-            return AppConfig()
-        except Exception as e:
-            print(f"Warning: Could not load config from {config_path}: {e}")
-            return AppConfig()
-    
     return AppConfig()
-
-
-def save_config(config: AppConfig, config_path: str) -> None:
-    """
-    Save configuration to JSON file.
-    
-    Args:
-        config: AppConfig instance to save
-        config_path: Path to save the config file
-    """
-    # TODO: Implement proper serialization
-    pass
-

@@ -1,8 +1,8 @@
 # 🛡️ Hienfeld VB Converter
 
-**Versnellen van vrije teksten analyse en opschoning.**
+**Automatisch vrije teksten analyseren en standaardiseren.**
 
-Deze applicatie helpt business analisten bij het analyseren, clusteren en opschonen van duizenden vrije polisteksten. Met behulp van slimme algoritmes (AI) worden teksten gegroepeerd en getoetst aan de nieuwe polisvoorwaarden.
+Deze applicatie helpt business analisten bij het analyseren, clusteren en opschonen van duizenden vrije polisteksten. Met behulp van slimme algoritmes worden teksten gegroepeerd en getoetst aan de nieuwe polisvoorwaarden.
 
 ---
 
@@ -14,7 +14,7 @@ Zorg dat **Python 3.10+** geïnstalleerd is op je computer.
 ### 2. Installatie
 
 ```bash
-# Clone of download het project
+# Navigeer naar het project
 cd "pad/naar/Vb agent"
 
 # Installeer dependencies
@@ -24,10 +24,10 @@ pip install -r requirements.txt
 ### 3. Starten
 
 ```bash
-python -m streamlit run app.py
+python -m reflex run
 ```
 
-De tool opent nu automatisch in je webbrowser (meestal op `http://localhost:8501`).
+De app opent automatisch in je webbrowser op **http://localhost:3000/**
 
 ---
 
@@ -49,9 +49,10 @@ Sleep je Excel- of CSV-export met vrije teksten in het eerste vak. De tool herke
 ### Stap 3: Instellingen & Instructie
 *   **Cluster Nauwkeurigheid:** Via het menu links kun je instellen hoe streng de clustering moet zijn (80-100%).
 *   **Min. Frequentie:** Bepaal wanneer een tekst als "standaard" wordt gezien.
+*   **Window Size:** Beperk het aantal clusters waartegen vergeleken wordt (voor snelheid).
 
 ### Stap 4: Analyse & Resultaat
-Klik op **🚀 Start Analyse**. De tool gaat nu aan het werk:
+Klik op **START ANALYSE**. De tool gaat nu aan het werk:
 
 1.  **Clustering:** Teksten die op elkaar lijken worden samengevoegd
 2.  **Voorwaarden Check:** ✅ **Elke tekst wordt vergeleken met de voorwaarden!**
@@ -61,8 +62,8 @@ Klik op **🚀 Start Analyse**. De tool gaat nu aan het werk:
 3.  **Multi-Clausule Detectie:** Herkent teksten met meerdere clausules → **SPLITSEN**
 4.  **Frequentie Check:** Vaak voorkomende teksten → **STANDAARDISEREN**
 
-### Stap 4: Download
-Als de analyse klaar is, verschijnt er een tabel. Klik op **📥 Download Rapport** om de resultaten als Excel-bestand te krijgen.
+### Stap 5: Download
+Als de analyse klaar is, verschijnt er een tabel. Klik op **Download Rapport (Excel)** om de resultaten als Excel-bestand te krijgen.
 
 ---
 
@@ -91,22 +92,28 @@ Als de analyse klaar is, verschijnt er een tabel. Klik op **📥 Download Rappor
 De applicatie volgt een **MVC-achtige architectuur** met domeingedreven OOP:
 
 ```
-hienfeld/
-├── domain/          # Domeinmodellen (Clause, Cluster, AnalysisAdvice)
-├── services/        # Business logic services
-│   ├── ai/          # AI-extensies (optioneel)
-│   └── ...
-├── ui/              # View en Controller
-├── utils/           # Hulpfuncties
-└── config.py        # Configuratie
+Vb agent/
+├── hienfeld_app/       # Reflex UI applicatie
+│   ├── components/    # UI componenten
+│   ├── state.py       # State management
+│   └── styles.py      # Hienfeld Design System
+├── hienfeld/          # Backend package
+│   ├── domain/        # Domeinmodellen (Clause, Cluster, AnalysisAdvice)
+│   ├── services/      # Business logic services
+│   │   ├── ai/        # AI-extensies (optioneel)
+│   │   └── ...
+│   ├── utils/         # Hulpfuncties
+│   └── config.py      # Configuratie
+├── assets/            # Static files (logo, etc.)
+└── clausulebibliotheek/ # Helper scripts
 ```
 
 ### Componenten
 
 | Component | Verantwoordelijkheid |
 |-----------|---------------------|
-| **View** (`ui/view.py`) | Streamlit UI rendering |
-| **Controller** (`ui/controller.py`) | Orchestratie van services |
+| **HienfeldState** (`hienfeld_app/state.py`) | Application state & async processing |
+| **Components** (`hienfeld_app/components/`) | Reflex UI components |
 | **IngestionService** | CSV/Excel inlezen |
 | **PreprocessingService** | Tekstnormalisatie |
 | **PolicyParserService** | PDF/DOCX/TXT parsing |
@@ -167,33 +174,24 @@ config.ai.embedding_model = "sentence-transformers/paraphrase-multilingual-MiniL
 ### Project structuur
 ```
 Vb agent/
-├── app.py                 # Streamlit entry point
-├── requirements.txt       # Dependencies
-├── hienfeld/              # Main package
-│   ├── __init__.py
-│   ├── config.py          # Configuratie
-│   ├── logging_config.py  # Logging setup
-│   ├── domain/            # Domeinmodellen
-│   ├── services/          # Business logic
-│   ├── ui/                # View & Controller
-│   └── utils/             # Hulpfuncties
-└── archive/               # Oude versies
-```
-
-### Tests uitvoeren
-```bash
-# Installeer test dependencies
-pip install pytest pytest-cov
-
-# Run tests
-pytest tests/ -v
+├── rxconfig.py           # Reflex configuratie
+├── requirements.txt      # Dependencies
+├── hienfeld_app/         # Reflex UI applicatie
+│   ├── hienfeld_app.py   # Main app entry
+│   ├── state.py          # State management
+│   └── components/      # UI componenten
+├── hienfeld/             # Backend package
+│   ├── domain/           # Domeinmodellen
+│   ├── services/         # Business logic
+│   └── utils/           # Hulpfuncties
+└── assets/              # Static files
 ```
 
 ---
 
 ## 📊 Technische Info
 
-*   **Framework:** Streamlit (Python)
+*   **Framework:** Reflex (Python full-stack)
 *   **Architectuur:** MVC + Domain-Driven Design
 *   **Algoritmes:** Leader Clustering, Fuzzy Matching (RapidFuzz)
 *   **Veiligheid:** De tool draait lokaal. Geen data verlaat de Hienfeld-omgeving.
@@ -201,6 +199,15 @@ pytest tests/ -v
 ---
 
 ## 📜 Changelog
+
+### v3.0.0 (2025) - Reflex Migration
+- 🎨 **Migratie naar Reflex framework**
+  - Moderne full-stack Python framework
+  - Async processing voor responsieve UI
+  - Persistent state management
+  - Hienfeld Design System volledig behouden
+- ⚡ Verbeterde performance tijdens lange analyses
+- 🎯 Betere UX met real-time progress updates
 
 ### v2.1.0 (2025) - ⚠️ KRITIEKE UPDATE
 - 🔥 **FIX: Voorwaarden worden nu DAADWERKELIJK gebruikt!**
@@ -224,4 +231,4 @@ pytest tests/ -v
 
 ---
 
-*Versie 2.0 - Hienfeld - 2025*
+*Versie 3.0 - Hienfeld - 2025*

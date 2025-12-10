@@ -1,6 +1,11 @@
 # hienfeld/services/clustering_service.py
 """
 Service for clustering similar clauses using the Leader algorithm.
+
+IMPROVED v2.1:
+- Uses aggressive text normalization to ignore variable parts (addresses, amounts, dates)
+- Two-stage matching: first on normalized text, then on original for verification
+- Better clustering of similar clauses with different specific values
 """
 from typing import List, Dict, Tuple, Optional, Callable
 import re
@@ -9,6 +14,7 @@ from ..config import AppConfig
 from ..domain.clause import Clause
 from ..domain.cluster import Cluster
 from .similarity_service import SimilarityService, RapidFuzzSimilarityService
+from ..utils.text_normalization import normalize_for_clustering
 from ..logging_config import get_logger
 
 logger = get_logger('clustering_service')
@@ -17,6 +23,9 @@ logger = get_logger('clustering_service')
 class ClusteringService:
     """
     Groups similar clauses using the Leader clustering algorithm.
+    
+    IMPROVED v2.1: Uses aggressive normalization to cluster similar clauses
+    that differ only in variable parts (addresses, amounts, dates).
     
     The Leader algorithm is a single-pass clustering approach:
     1. Sort items by length (longest first)
@@ -54,6 +63,10 @@ class ClusteringService:
         """
         Cluster clauses using the Leader algorithm.
         
+        IMPROVED v2.1: Uses two-stage matching:
+        1. First match on normalized text (with placeholders for variables)
+        2. Creates better clusters for similar clauses with different addresses/amounts
+        
         Args:
             clauses: List of Clause objects to cluster
             progress_callback: Optional callback for progress updates (0-100)
@@ -75,6 +88,7 @@ class ClusteringService:
         clusters: List[Cluster] = []
         clause_to_cluster: Dict[str, str] = {}
         exact_match_cache: Dict[str, str] = {}  # simplified_text -> cluster_id
+        normalized_match_cache: Dict[str, str] = {}  # normalized_text -> cluster_id (NEW!)
         
         cluster_counter = 1
         total = len(sorted_clauses)
@@ -82,6 +96,9 @@ class ClusteringService:
         min_length = self.config.clustering.min_text_length
         threshold = self.config.clustering.similarity_threshold
         length_tolerance = self.config.clustering.length_tolerance
+        
+        # Lower threshold for normalized text matching (more aggressive clustering)
+        normalized_threshold = max(0.80, threshold - 0.05)
         
         for i, clause in enumerate(sorted_clauses):
             # Progress update
@@ -95,7 +112,10 @@ class ClusteringService:
                 clause_to_cluster[clause.id] = "NVT"
                 continue
             
-            # Check exact match cache first (O(1) lookup)
+            # Compute normalized version (with placeholders for variables)
+            normalized_text = normalize_for_clustering(clause.raw_text)
+            
+            # STAGE 1: Check exact match cache (O(1) lookup)
             if text in exact_match_cache:
                 cluster_id = exact_match_cache[text]
                 clause_to_cluster[clause.id] = cluster_id
@@ -107,7 +127,20 @@ class ClusteringService:
                         break
                 continue
             
-            # Fuzzy match against recent leaders
+            # STAGE 2: Check normalized match cache (catches address/amount variations)
+            if normalized_text in normalized_match_cache:
+                cluster_id = normalized_match_cache[normalized_text]
+                clause_to_cluster[clause.id] = cluster_id
+                exact_match_cache[text] = cluster_id  # Also cache exact for future
+                
+                # Update cluster frequency
+                for cluster in clusters:
+                    if cluster.id == cluster_id:
+                        cluster.add_member(clause.id)
+                        break
+                continue
+            
+            # STAGE 3: Fuzzy match against recent leaders
             found_cluster = None
             
             # Look back at recent clusters (window)
@@ -122,10 +155,25 @@ class ClusteringService:
                     if len_diff > length_tolerance:
                         continue
                 
-                # Compute similarity
+                # First try: match on original simplified text
                 similarity = self.similarity_service.similarity(leader_text, text)
                 
                 if similarity >= threshold:
+                    found_cluster = cluster
+                    break
+                
+                # Second try: match on normalized text (catches variable differences)
+                leader_normalized = normalize_for_clustering(cluster.original_text)
+                normalized_similarity = self.similarity_service.similarity(
+                    leader_normalized, 
+                    normalized_text
+                )
+                
+                if normalized_similarity >= normalized_threshold:
+                    logger.debug(
+                        f"Matched via normalization: {normalized_similarity:.2f} "
+                        f"(original was {similarity:.2f})"
+                    )
                     found_cluster = cluster
                     break
             
@@ -134,6 +182,7 @@ class ClusteringService:
                 cluster_id = found_cluster.id
                 clause_to_cluster[clause.id] = cluster_id
                 exact_match_cache[text] = cluster_id
+                normalized_match_cache[normalized_text] = cluster_id
                 found_cluster.add_member(clause.id)
             else:
                 # Create new cluster
@@ -151,6 +200,7 @@ class ClusteringService:
                 clusters.append(new_cluster)
                 clause_to_cluster[clause.id] = cluster_id
                 exact_match_cache[text] = cluster_id
+                normalized_match_cache[normalized_text] = cluster_id
                 cluster_counter += 1
         
         # Final progress update
