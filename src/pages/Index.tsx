@@ -29,7 +29,7 @@ const Index = () => {
 
   const [policyFile, setPolicyFile] = useState<File | null>(null);
   const [conditionsFiles, setConditionsFiles] = useState<File[]>([]);
-  const [clauseLibraryFile, setClauseLibraryFile] = useState<File | null>(null);
+  const [clauseLibraryFiles, setClauseLibraryFiles] = useState<File[]>([]);
   const [extraInstruction, setExtraInstruction] = useState("");
 
   const [settings, setSettings] = useState({
@@ -87,12 +87,20 @@ const Index = () => {
 
   const handleClauseLibraryUpload = useCallback(
     (files: File[]) => {
-      const file = files[0];
-      setClauseLibraryFile(file);
-      toast({
-        title: "Clausulebibliotheek geüpload",
-        description: `${file.name} is toegevoegd.`,
+      setClauseLibraryFiles((prev) => {
+        // Combine existing files with new files, avoiding duplicates
+        const existingNames = new Set(prev.map(f => f.name + f.size));
+        const newFiles = files.filter(f => !existingNames.has(f.name + f.size));
+        return [...prev, ...newFiles];
       });
+      if (files.length > 0) {
+        toast({
+          title: "Clausulebibliotheek geüpload",
+          description: files.length === 1 
+            ? `${files[0].name} is toegevoegd.`
+            : `${files.length} bestanden zijn toegevoegd.`,
+        });
+      }
     },
     [toast],
   );
@@ -191,7 +199,7 @@ const Index = () => {
       const res = await startAnalysis({
         policyFile,
         conditionsFiles,
-        clauseLibraryFile,
+        clauseLibraryFiles,
         settings,
         extraInstruction,
       });
@@ -209,7 +217,7 @@ const Index = () => {
   }, [
     policyFile,
     conditionsFiles,
-    clauseLibraryFile,
+    clauseLibraryFiles,
     settings,
     extraInstruction,
     toast,
@@ -292,13 +300,14 @@ const Index = () => {
               <FileDropZone
                 title="3. Clausulebibliotheek (optioneel)"
                 description="Upload bibliotheek"
-                accept=".xlsx,.xls,.csv,.pdf,.docx"
+                accept=".xlsx,.xls,.csv,.pdf,.docx,.doc"
                 onFileSelect={handleClauseLibraryUpload}
-                status={clauseLibraryFile ? "success" : "idle"}
-                uploadedFile={
-                  clauseLibraryFile
-                    ? { name: clauseLibraryFile.name, size: clauseLibraryFile.size }
-                    : null
+                status={clauseLibraryFiles.length > 0 ? "success" : "idle"}
+                multiple={true}
+                uploadedFiles={
+                  clauseLibraryFiles.length > 0
+                    ? clauseLibraryFiles.map(f => ({ name: f.name, size: f.size }))
+                    : undefined
                 }
                 className="animate-fade-up animation-delay-150"
               />

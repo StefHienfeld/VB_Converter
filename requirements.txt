@@ -1,40 +1,53 @@
-# Hienfeld VB Converter - Requirements
-# Core dependencies
+"""
+Hienfeld VB Converter - Backend Requirements
 
-# Web framework (Reflex - full-stack Python framework)
+Core:
+- Analysis pipeline (hienfeld/)
+- FastAPI REST API (hienfeld_api/)
+
+The original Reflex UI is still supported for now, but the React/Vite
+frontend is the primary UI going forward.
+"""
+
+# -------------------------
+# Web / API
+# -------------------------
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+
+# (Optional) Legacy Reflex UI
 reflex>=0.6.0
 
+# -------------------------
 # Data processing
+# -------------------------
 pandas>=2.0.0
 openpyxl>=3.1.0
+xlsxwriter>=3.1.0
 
+# -------------------------
 # Document parsing
+# -------------------------
 python-docx>=0.8.11
-
-# Fast string matching
-rapidfuzz>=3.0.0
-
-# PDF parsing (both installed for maximum compatibility)
 PyMuPDF>=1.23.0
 pdfplumber>=0.10.0
+pywin32>=306; sys_platform == 'win32'
 
-# ===================================
-# AI/LLM dependencies (for enhanced analysis)
-# ===================================
+# -------------------------
+# Fast string matching
+# -------------------------
+rapidfuzz>=3.0.0
 
-# Embeddings (for semantic search)
+# -------------------------
+# AI / LLM (optional)
+# -------------------------
 sentence-transformers>=2.2.0
-
-# Vector store (for fast similarity search)
 faiss-cpu>=1.7.4
-
-# LLM integration (for AI-powered compliance analysis)
 openai>=1.0.0
 
-# ===================================
-# Optional dependencies
-# Uncomment if needed
-# ===================================
+# -------------------------
+# Optional extras
+# -------------------------
 
 # Near-duplicate detection (alternative to fuzzy matching)
 # datasketch>=1.6.0

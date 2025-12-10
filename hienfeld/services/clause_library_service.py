@@ -5,10 +5,12 @@ Service for managing and searching the standard clause library.
 The clause library contains pre-approved standard clauses that can be used
 to replace similar free text clauses, enabling policy standardization.
 """
-from typing import List, Optional, Tuple
-from io import BytesIO
-import pandas as pd
+import os
 import re
+from io import BytesIO
+from typing import List, Optional, Tuple
+
+import pandas as pd
 
 from ..config import AppConfig
 from ..domain.standard_clause import StandardClause, ClauseLibraryMatch
@@ -24,7 +26,7 @@ class ClauseLibraryService:
     Manages the standard clause library for sanering (standardization).
     
     Responsibilities:
-    - Load clause library from CSV/Excel
+    - Load clause library from CSV/Excel or multiple DOCX/PDF/DOC files
     - Index clauses for fast similarity search
     - Find matching standard clauses for free text
     """
@@ -59,56 +61,250 @@ class ClauseLibraryService:
         # Clause storage
         self._clauses: List[StandardClause] = []
         self._is_loaded = False
+        
+        # Lazy load win32com application
+        self._word_app = None
     
+    def load_from_files(self, files: List[Tuple[bytes, str]]) -> int:
+        """
+        Load clause library from multiple files (batch processing).
+        
+        Supports:
+        - CSV/Excel (treated as bulk imports)
+        - PDF/DOCX/DOC (treated as individual clauses or multi-clause docs)
+        
+        Args:
+            files: List of (file_bytes, filename) tuples
+            
+        Returns:
+            Total number of clauses loaded
+        """
+        logger.info(f"Batch loading {len(files)} files into clause library")
+        
+        # Initialize Word App if needed (only on Windows and if .doc files present)
+        has_doc_files = any(f[1].lower().endswith('.doc') for f in files)
+        if has_doc_files:
+            self._init_word_app()
+        
+        count_before = len(self._clauses)
+        
+        for file_bytes, filename in files:
+            try:
+                self.load_from_file(file_bytes, filename)
+            except Exception as e:
+                logger.warning(f"Failed to load clause file {filename}: {e}")
+                continue
+                
+        # Clean up Word App
+        self._quit_word_app()
+        
+        total_loaded = len(self._clauses) - count_before
+        self._is_loaded = len(self._clauses) > 0
+        logger.info(f"Batch load complete. Added {total_loaded} clauses. Total: {len(self._clauses)}")
+        
+        return total_loaded
+
     def load_from_file(self, file_bytes: bytes, filename: str) -> int:
         """
-        Load clause library from CSV, Excel, PDF, or Word file.
+        Load clause library from CSV, Excel, PDF, DOC, or DOCX file.
         
         For CSV/Excel:
         - Expected columns (case-insensitive): Code, Tekst/Text, Categorie/Category (optional)
         
-        For PDF/Word:
-        - Automatically extracts clauses by finding clause codes (pattern: \d[A-Z]{2}\d)
-        - Extracts text following each code until next code or section break
+        For PDF/DOCX/DOC:
+        - Tries to extract clause code/title from the file content (first line).
+        - Falls back to using the filename as the clause code.
         
         Args:
             file_bytes: Raw bytes of the file
             filename: Original filename (for format detection)
             
         Returns:
-            Number of clauses loaded
+            Number of clauses loaded from this file
             
         Raises:
             ValueError: If file format is not supported
         """
-        logger.info(f"Loading clause library from: {filename}")
+        # Don't log every single file in batch mode to avoid spam, but keep for single calls
+        # logger.debug(f"Loading clause file: {filename}")
         
         filename_lower = filename.lower()
+        new_clauses = []
         
         # Load data based on file type
         if filename_lower.endswith('.csv'):
             file_obj = BytesIO(file_bytes)
             df = self._load_csv(file_obj, file_bytes)
-            self._clauses = self._parse_dataframe(df)
+            new_clauses = self._parse_dataframe(df)
         elif filename_lower.endswith(('.xlsx', '.xls')):
             file_obj = BytesIO(file_bytes)
             df = pd.read_excel(file_obj)
-            self._clauses = self._parse_dataframe(df)
+            new_clauses = self._parse_dataframe(df)
         elif filename_lower.endswith('.pdf'):
-            self._clauses = self._parse_pdf(file_bytes, filename)
+            text = self._extract_text_pdf(file_bytes)
+            new_clauses = self._parse_single_clause_file(text, filename)
         elif filename_lower.endswith('.docx'):
-            self._clauses = self._parse_docx(file_bytes, filename)
+            text = self._extract_text_docx(file_bytes)
+            new_clauses = self._parse_single_clause_file(text, filename)
+        elif filename_lower.endswith('.doc'):
+            text = self._extract_text_doc_legacy(file_bytes, filename)
+            new_clauses = self._parse_single_clause_file(text, filename)
         else:
-            raise ValueError(
-                f"Unsupported file format: {filename}. "
-                f"Supported formats: CSV, Excel (.xlsx, .xls), PDF, Word (.docx)"
-            )
+            logger.warning(f"Unsupported file format: {filename}")
+            return 0
         
-        self._is_loaded = True
-        logger.info(f"Loaded {len(self._clauses)} standard clauses from {filename}")
+        self._clauses.extend(new_clauses)
         
-        return len(self._clauses)
-    
+        # Only set is_loaded to True if we are not in a batch (handled by caller) or if this is a single call
+        if not self._is_loaded and new_clauses:
+            self._is_loaded = True
+            
+        return len(new_clauses)
+
+    def _parse_single_clause_file(self, text: str, filename: str) -> List[StandardClause]:
+        """
+        Parse a single file content as a clause.
+        
+        Strategy:
+        1. Clean up text.
+        2. Detect Clause Code/Title from the first line of content.
+        3. If ambiguous, fallback to Filename (minus extension).
+        
+        Returns:
+            List with a single StandardClause object (or multiple if patterns found? 
+            For now, assume 1 file = 1 clause unless explicit patterns found).
+        """
+        if not text or not text.strip():
+            return []
+            
+        text = self._clean_text(text)
+        
+        # Attempt to find code in text (legacy support for multi-clause files)
+        # If the file contains explicit codes like "9NX3 ... VB12 ...", parse it as multi-clause
+        try:
+            return self._extract_clauses_from_text(text, filename)
+        except ValueError:
+            # No explicit multiple codes found -> Treat entire file as ONE clause
+            pass
+            
+        # Strategy: File = 1 Clause
+        # Determine Code/Title
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        if not lines:
+            return []
+            
+        first_line = lines[0]
+        filename_base = os.path.splitext(filename)[0]
+        
+        # Heuristic: If first line is short (< 100 chars) and looks like a header, use it.
+        # Otherwise use filename.
+        code = filename_base
+        
+        if len(first_line) < 100:
+            # Valid header candidate
+            code = first_line
+            # Remove the header from the text body to avoid duplication? 
+            # User requirement says: "If match, that is the clause number. If not, text matches."
+            # Actually, usually the title is part of the text. Let's keep it in 'text' but use it as 'code'.
+        
+        # Category detection
+        category = self._detect_category(code, text)
+        
+        clause = StandardClause(
+            code=code,
+            text=text,
+            simplified_text=simplify_text(text),
+            category=category,
+            description=None
+        )
+        
+        return [clause] if clause.is_valid else []
+
+    def _clean_text(self, text: str) -> str:
+        """Remove unprintable characters."""
+        if not text:
+            return ""
+        # Remove control characters except newline and tab
+        return re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text).strip()
+
+    def _init_word_app(self):
+        """Initialize Word Application for legacy .doc parsing."""
+        if os.name != 'nt':
+            return
+        try:
+            import win32com.client as win32
+            # pythoncom.CoInitialize() might be needed in threads
+            import pythoncom
+            pythoncom.CoInitialize()
+            
+            self._word_app = win32.Dispatch("Word.Application")
+            self._word_app.Visible = False
+            self._word_app.DisplayAlerts = False
+        except Exception as e:
+            logger.warning(f"Could not initialize Word for .doc parsing: {e}")
+
+    def _quit_word_app(self):
+        """Quit Word Application."""
+        if self._word_app:
+            try:
+                self._word_app.Quit()
+            except:
+                pass
+            self._word_app = None
+
+    def _extract_text_doc_legacy(self, file_bytes: bytes, filename: str) -> str:
+        """Extract text from .doc using win32com (Windows only)."""
+        if not self._word_app:
+            return ""
+            
+        import tempfile
+        import os
+        
+        # Save bytes to temp file because Word needs a path
+        fd, path = tempfile.mkstemp(suffix='.doc')
+        try:
+            with os.fdopen(fd, 'wb') as tmp:
+                tmp.write(file_bytes)
+            
+            doc = self._word_app.Documents.Open(path, ReadOnly=True, Visible=False)
+            text = doc.Range().Text
+            doc.Close(False)
+            return text
+        except Exception as e:
+            logger.error(f"Error parsing .doc {filename}: {e}")
+            return ""
+        finally:
+            # Cleanup temp file
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except:
+                    pass
+
+    def _extract_text_docx(self, file_bytes: bytes) -> str:
+        """Extract text from .docx using python-docx."""
+        try:
+            from docx import Document
+            doc = Document(BytesIO(file_bytes))
+            paragraphs = [para.text for para in doc.paragraphs if para.text.strip()]
+            return "\n".join(paragraphs)
+        except Exception as e:
+            logger.error(f"Error parsing .docx: {e}")
+            return ""
+
+    def _extract_text_pdf(self, file_bytes: bytes) -> str:
+        """Extract text from .pdf using PyMuPDF."""
+        text = ""
+        try:
+            import fitz
+            doc = fitz.open(stream=file_bytes, filetype="pdf")
+            for page in doc:
+                text += page.get_text() + "\n"
+            doc.close()
+        except Exception as e:
+            logger.error(f"Error parsing PDF: {e}")
+        return text
+
     def _parse_dataframe(self, df: pd.DataFrame) -> List[StandardClause]:
         """
         Parse a DataFrame into StandardClause objects.
@@ -193,94 +389,13 @@ class ClauseLibraryService:
                 return col
         return None
     
-    def _parse_pdf(self, file_bytes: bytes, filename: str) -> List[StandardClause]:
-        """
-        Parse PDF file and extract clauses.
-        
-        Looks for clause codes (pattern: \d[A-Z]{2}\d) and extracts text following each code.
-        
-        Args:
-            file_bytes: Raw bytes of PDF file
-            filename: Source filename
-            
-        Returns:
-            List of StandardClause objects
-        """
-        text = ""
-        
-        # Try PyMuPDF (fitz) first
-        try:
-            import fitz  # PyMuPDF
-            doc = fitz.open(stream=file_bytes, filetype="pdf")
-            for page in doc:
-                text += page.get_text() + "\n"
-            doc.close()
-            logger.info(f"Parsed PDF with PyMuPDF")
-        except ImportError:
-            logger.debug("PyMuPDF not available, trying pdfplumber")
-        except Exception as e:
-            logger.warning(f"PyMuPDF failed: {e}, trying pdfplumber")
-        
-        # Try pdfplumber as fallback
-        if not text:
-            try:
-                import pdfplumber
-                with pdfplumber.open(BytesIO(file_bytes)) as pdf:
-                    for page in pdf.pages:
-                        page_text = page.extract_text() or ""
-                        text += page_text + "\n"
-                logger.info(f"Parsed PDF with pdfplumber")
-            except ImportError:
-                raise ValueError("PDF parsing requires PyMuPDF or pdfplumber. Install with: pip install PyMuPDF pdfplumber")
-            except Exception as e:
-                raise ValueError(f"Failed to parse PDF: {e}")
-        
-        if not text.strip():
-            raise ValueError("Could not extract text from PDF. File may be empty or corrupted.")
-        
-        return self._extract_clauses_from_text(text, filename)
-    
-    def _parse_docx(self, file_bytes: bytes, filename: str) -> List[StandardClause]:
-        """
-        Parse Word DOCX file and extract clauses.
-        
-        Looks for clause codes (pattern: \d[A-Z]{2}\d) and extracts text following each code.
-        
-        Args:
-            file_bytes: Raw bytes of DOCX file
-            filename: Source filename
-            
-        Returns:
-            List of StandardClause objects
-        """
-        try:
-            from docx import Document
-            doc = Document(BytesIO(file_bytes))
-            paragraphs = [para.text for para in doc.paragraphs if para.text.strip()]
-            text = "\n".join(paragraphs)
-            
-            if not text.strip():
-                raise ValueError("Could not extract text from Word document. File may be empty.")
-            
-            return self._extract_clauses_from_text(text, filename)
-        except ImportError:
-            raise ValueError("Word parsing requires python-docx. Install with: pip install python-docx")
-        except Exception as e:
-            raise ValueError(f"Failed to parse Word document: {e}")
-    
+    # Re-implementing _extract_clauses_from_text for legacy multi-clause support
     def _extract_clauses_from_text(self, text: str, source_filename: str) -> List[StandardClause]:
         """
         Extract clauses from unstructured text by finding clause codes.
         
         Pattern: Looks for codes like "9NX3", "VB12" (format: \d[A-Z]{2}\d)
         Extracts text following each code until next code or section break.
-        
-        Args:
-            text: Full text content
-            source_filename: Source filename for logging
-            
-        Returns:
-            List of StandardClause objects
         """
         # Clause code pattern: digit + 2 uppercase letters + digit (e.g., 9NX3, VB12)
         clause_code_pattern = r'\b(\d[A-Z]{2}\d)\b'
@@ -337,7 +452,6 @@ class ClauseLibraryService:
             
             if clause.is_valid:
                 clauses.append(clause)
-                current_category = category  # Use for next clause if no header found
         
         logger.info(f"Geëxtraheerd {len(clauses)} clausules uit {source_filename}")
         
@@ -346,13 +460,6 @@ class ClauseLibraryService:
     def _detect_category(self, before_text: str, clause_text: str) -> str:
         """
         Try to detect category from context or clause content.
-        
-        Args:
-            before_text: Text before the clause code
-            clause_text: The clause text itself
-            
-        Returns:
-            Detected category or "Algemeen"
         """
         # Common category keywords
         category_keywords = {
@@ -517,4 +624,3 @@ class ClauseLibraryService:
         self._clauses = []
         self._is_loaded = False
         logger.info("Clause library cleared")
-
