@@ -15,7 +15,7 @@ interface AnalysisProgressProps {
 export const AnalysisProgress = ({ steps, className }: AnalysisProgressProps) => {
   return (
     <div className={cn("floating-card p-6", className)}>
-      <h3 className="text-base font-semibold text-foreground mb-6">Analyse Voortgang</h3>
+      <h3 className="text-base font-semibold text-foreground mb-6">Voortgang</h3>
       
       <div className="space-y-4">
         {steps.map((step, index) => (
