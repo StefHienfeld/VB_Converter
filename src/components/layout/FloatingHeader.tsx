@@ -10,22 +10,26 @@ interface FloatingHeaderProps {
 
 export const FloatingHeader = ({ onSettingsClick, onHelpClick }: FloatingHeaderProps) => {
   return (
-    <header className="w-[95%] mx-auto mt-6 mb-8 floating-card px-6 py-4 animate-slide-down">
-      <div className="flex items-center justify-between">
-        {/* Logo & Title */}
-        <div className="flex items-center gap-3">
+    <header className="container max-w-7xl mx-auto mt-6 mb-8 px-4 animate-slide-down">
+      <div className="relative flex items-center justify-between h-20 bg-card/80 backdrop-blur-md rounded-xl border border-border/50 px-6 shadow-sm">
+        {/* Left: Logo */}
+        <div className="flex items-center gap-3 z-10">
           <img 
             src={hienfeldLogo} 
             alt="Hienfeld Logo" 
-            className="h-10 w-auto"
+            className="h-12 w-auto"
           />
-          <h1 className="text-lg font-bold text-foreground tracking-tight">
+        </div>
+
+        {/* Center: Title */}
+        <div className="absolute left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2">
+          <h1 className="text-xl font-bold text-foreground tracking-tight whitespace-nowrap">
             VB Converter
           </h1>
         </div>
 
-        {/* Actions */}
-        <div className="flex items-center gap-2">
+        {/* Right: Actions */}
+        <div className="flex items-center gap-2 z-10">
           <Button
             variant="ghost"
             size="icon"

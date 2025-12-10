@@ -9,6 +9,7 @@ interface FileDropZoneProps {
   onFileSelect?: (files: File[]) => void;
   status?: "idle" | "active" | "success" | "error";
   uploadedFile?: { name: string; size: number } | null;
+  uploadedFiles?: { name: string; size: number }[];
   multiple?: boolean;
   className?: string;
 }
@@ -20,6 +21,7 @@ export const FileDropZone = ({
   onFileSelect,
   status = "idle",
   uploadedFile,
+  uploadedFiles,
   multiple = false,
   className,
 }: FileDropZoneProps) => {
@@ -60,10 +62,10 @@ export const FileDropZone = ({
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = Array.from(e.target.files || []);
       if (files.length > 0) {
-        onFileSelect?.(files);
+        onFileSelect?.(multiple ? files : [files[0]]);
       }
     },
-    [onFileSelect]
+    [onFileSelect, multiple]
   );
 
   const formatFileSize = (bytes: number) => {
@@ -109,15 +111,33 @@ export const FileDropZone = ({
           htmlFor={`file-input-${title.replace(/\s+/g, "-")}`}
           className="flex flex-col items-center cursor-pointer w-full"
         >
-          {currentStatus === "success" && uploadedFile ? (
+          {currentStatus === "success" && (uploadedFile || (uploadedFiles && uploadedFiles.length > 0)) ? (
             <>
               <div className="w-16 h-16 rounded-full bg-success/10 flex items-center justify-center mb-4">
                 <FileCheck className="w-8 h-8 text-success" />
               </div>
-              <p className="font-semibold text-foreground mb-1">{uploadedFile.name}</p>
-              <p className="text-sm text-muted-foreground">
-                {formatFileSize(uploadedFile.size)}
-              </p>
+              {multiple && uploadedFiles && uploadedFiles.length > 0 ? (
+                <div className="w-full space-y-2 max-h-[200px] overflow-y-auto">
+                  <p className="text-sm font-semibold text-foreground mb-2">
+                    {uploadedFiles.length} bestand{uploadedFiles.length !== 1 ? "en" : ""} geüpload
+                  </p>
+                  {uploadedFiles.map((file, idx) => (
+                    <div key={idx} className="text-left w-full p-2 bg-muted/50 rounded-lg">
+                      <p className="font-medium text-foreground text-sm truncate">{file.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatFileSize(file.size)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : uploadedFile ? (
+                <>
+                  <p className="font-semibold text-foreground mb-1">{uploadedFile.name}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {formatFileSize(uploadedFile.size)}
+                  </p>
+                </>
+              ) : null}
             </>
           ) : currentStatus === "error" ? (
             <>

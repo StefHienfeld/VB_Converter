@@ -1,5 +1,3 @@
-import { X } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -27,19 +25,9 @@ export const SettingsDrawer = ({
     <Sheet open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
       <SheetContent className="glass-panel w-[400px] border-l-0 p-0">
         <SheetHeader className="p-6 pb-0">
-          <div className="flex items-center justify-between">
-            <SheetTitle className="text-lg font-semibold text-foreground">
-              Instellingen
-            </SheetTitle>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={onClose}
-              className="rounded-full hover:bg-muted"
-            >
-              <X className="w-5 h-5" />
-            </Button>
-          </div>
+          <SheetTitle className="text-lg font-semibold text-foreground">
+            Instellingen
+          </SheetTitle>
         </SheetHeader>
 
         <div className="p-6 space-y-8">

@@ -333,8 +333,23 @@
     20%, 40%, 60%, 80% { transform: translateX(4px); }
   }
 
+  @keyframes shrink-up {
+    from {
+      transform: scale(1) translateY(0);
+      opacity: 1;
+    }
+    to {
+      transform: scale(0.85) translateY(-80px);
+      opacity: 0.6;
+    }
+  }
+
   .animate-fade-up {
     animation: fade-up 0.5s ease-out forwards;
+  }
+
+  .animate-shrink-up {
+    animation: shrink-up 0.7s ease-in-out forwards;
   }
 
   .animate-slide-down {

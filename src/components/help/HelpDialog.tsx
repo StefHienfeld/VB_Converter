@@ -4,17 +4,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Badge } from "@/components/ui/badge";
 
 interface HelpDialogProps {
   open: boolean;
-  onClose: () => void;
+  onOpenChange: (open: boolean) => void;
 }
 
-export const HelpDialog = ({ open, onClose }: HelpDialogProps) => {
+export const HelpDialog = ({ open, onOpenChange }: HelpDialogProps) => {
   return (
-    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="floating-card max-w-2xl max-h-[80vh] overflow-auto custom-scrollbar">
         <DialogHeader>
           <DialogTitle className="text-xl font-semibold text-foreground">
@@ -28,67 +26,45 @@ export const HelpDialog = ({ open, onClose }: HelpDialogProps) => {
             Upload de bestanden en laat de tool automatisch clusters maken en adviezen genereren.
           </p>
 
-          <Accordion type="single" collapsible className="w-full">
-            <AccordionItem value="step-1">
-              <AccordionTrigger className="text-sm font-medium">
+          <div className="space-y-5">
+            <div>
+              <h4 className="text-sm font-semibold text-foreground mb-2">
                 Stap 1: Upload Polisbestand
-              </AccordionTrigger>
-              <AccordionContent className="text-sm text-muted-foreground">
+              </h4>
+              <p className="text-sm text-muted-foreground">
                 Sleep een Excel- of CSV-export met vrije teksten naar het eerste vak.
                 De tool herkent automatisch kolommen zoals 'Tekst' of 'Vrije Tekst'.
-              </AccordionContent>
-            </AccordionItem>
+              </p>
+            </div>
 
-            <AccordionItem value="step-2">
-              <AccordionTrigger className="text-sm font-medium">
+            <div>
+              <h4 className="text-sm font-semibold text-foreground mb-2">
                 Stap 2: Upload Voorwaarden
-              </AccordionTrigger>
-              <AccordionContent className="text-sm text-muted-foreground">
+              </h4>
+              <p className="text-sm text-muted-foreground">
                 Dit is een belangrijke stap. De tool vergelijkt elke vrije tekst tegen
                 de geüploade voorwaarden om te bepalen of de tekst al gedekt is.
-              </AccordionContent>
-            </AccordionItem>
+              </p>
+            </div>
 
-            <AccordionItem value="step-3">
-              <AccordionTrigger className="text-sm font-medium">
+            <div>
+              <h4 className="text-sm font-semibold text-foreground mb-2">
                 Stap 3: Configureer Instellingen
-              </AccordionTrigger>
-              <AccordionContent className="text-sm text-muted-foreground">
+              </h4>
+              <p className="text-sm text-muted-foreground">
                 Pas de cluster nauwkeurigheid, minimum frequentie en window size aan
                 via het instellingen menu (tandwiel icoon rechtsboven).
-              </AccordionContent>
-            </AccordionItem>
+              </p>
+            </div>
 
-            <AccordionItem value="step-4">
-              <AccordionTrigger className="text-sm font-medium">
+            <div>
+              <h4 className="text-sm font-semibold text-foreground mb-2">
                 Stap 4: Start Analyse
-              </AccordionTrigger>
-              <AccordionContent className="text-sm text-muted-foreground">
+              </h4>
+              <p className="text-sm text-muted-foreground">
                 Klik op 'Start Analyse' om het proces te starten. De tool clustert,
                 vergelijkt en genereert adviezen automatisch.
-              </AccordionContent>
-            </AccordionItem>
-          </Accordion>
-
-          <div className="pt-4 border-t border-border">
-            <h4 className="font-medium text-foreground mb-4">Advies Types</h4>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex items-center gap-2">
-                <Badge className="badge-verwijderen">Verwijderen</Badge>
-                <span className="text-xs text-muted-foreground">Gedekt in voorwaarden</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge className="badge-splitsen">Splitsen</Badge>
-                <span className="text-xs text-muted-foreground">Meerdere clausules</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge className="badge-standaardiseren">Standaardiseren</Badge>
-                <span className="text-xs text-muted-foreground">Vaak voorkomend</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge className="badge-behouden">Behouden</Badge>
-                <span className="text-xs text-muted-foreground">Specifieke afwijking</span>
-              </div>
+              </p>
             </div>
           </div>
         </div>

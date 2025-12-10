@@ -10,9 +10,10 @@ interface ProgressStep {
 interface AnalysisProgressProps {
   steps: ProgressStep[];
   className?: string;
+  children?: React.ReactNode;
 }
 
-export const AnalysisProgress = ({ steps, className }: AnalysisProgressProps) => {
+export const AnalysisProgress = ({ steps, className, children }: AnalysisProgressProps) => {
   return (
     <div className={cn("floating-card p-6", className)}>
       <h3 className="text-base font-semibold text-foreground mb-6">Voortgang</h3>
@@ -66,6 +67,8 @@ export const AnalysisProgress = ({ steps, className }: AnalysisProgressProps) =>
           </div>
         ))}
       </div>
+
+      {children && <div className="mt-6 pt-2">{children}</div>}
     </div>
   );
 };
