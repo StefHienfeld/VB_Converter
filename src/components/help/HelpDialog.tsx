@@ -24,8 +24,8 @@ export const HelpDialog = ({ open, onClose }: HelpDialogProps) => {
 
         <div className="mt-4 space-y-6">
           <p className="text-muted-foreground">
-            De VB Converter helpt u bij het analyseren en standaardiseren van vrije polisteksten.
-            Upload uw bestanden en laat de tool automatisch clusters maken en adviezen genereren.
+            De VB Converter helpt bij het analyseren en standaardiseren van vrije polisteksten.
+            Upload de bestanden en laat de tool automatisch clusters maken en adviezen genereren.
           </p>
 
           <Accordion type="single" collapsible className="w-full">
@@ -34,7 +34,7 @@ export const HelpDialog = ({ open, onClose }: HelpDialogProps) => {
                 Stap 1: Upload Polisbestand
               </AccordionTrigger>
               <AccordionContent className="text-sm text-muted-foreground">
-                Sleep uw Excel- of CSV-export met vrije teksten naar het eerste vak.
+                Sleep een Excel- of CSV-export met vrije teksten naar het eerste vak.
                 De tool herkent automatisch kolommen zoals 'Tekst' of 'Vrije Tekst'.
               </AccordionContent>
             </AccordionItem>
@@ -44,7 +44,7 @@ export const HelpDialog = ({ open, onClose }: HelpDialogProps) => {
                 Stap 2: Upload Voorwaarden
               </AccordionTrigger>
               <AccordionContent className="text-sm text-muted-foreground">
-                Dit is de belangrijkste stap! De tool vergelijkt elke vrije tekst tegen
+                Dit is een belangrijke stap. De tool vergelijkt elke vrije tekst tegen
                 de geüploade voorwaarden om te bepalen of de tekst al gedekt is.
               </AccordionContent>
             </AccordionItem>
@@ -55,7 +55,7 @@ export const HelpDialog = ({ open, onClose }: HelpDialogProps) => {
               </AccordionTrigger>
               <AccordionContent className="text-sm text-muted-foreground">
                 Pas de cluster nauwkeurigheid, minimum frequentie en window size aan
-                naar uw wensen via het instellingen menu.
+                via het instellingen menu (tandwiel icoon rechtsboven).
               </AccordionContent>
             </AccordionItem>
 

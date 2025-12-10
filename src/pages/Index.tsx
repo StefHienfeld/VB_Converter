@@ -3,6 +3,7 @@ import { FileStack, TrendingDown, Network, Download, Play, Loader2 } from "lucid
 import { Button } from "@/components/ui/button";
 import { FloatingHeader } from "@/components/layout/FloatingHeader";
 import { FileDropZone } from "@/components/upload/FileDropZone";
+import { ExtraInstructionInput } from "@/components/upload/ExtraInstructionInput";
 import { MetricWidget } from "@/components/metrics/MetricWidget";
 import { AnalysisProgress } from "@/components/analysis/AnalysisProgress";
 import { ResultsTable } from "@/components/results/ResultsTable";
@@ -69,6 +70,8 @@ const Index = () => {
   
   const [policyFile, setPolicyFile] = useState<{ name: string; size: number } | null>(null);
   const [conditionsFile, setConditionsFile] = useState<{ name: string; size: number } | null>(null);
+  const [clauseLibraryFile, setClauseLibraryFile] = useState<{ name: string; size: number } | null>(null);
+  const [extraInstruction, setExtraInstruction] = useState("");
   
   const [settings, setSettings] = useState({
     clusterAccuracy: 90,
@@ -80,10 +83,10 @@ const Index = () => {
   const [progressSteps, setProgressSteps] = useState<
     { id: string; label: string; status: "pending" | "active" | "completed" }[]
   >([
-    { id: "1", label: "Ingestie", status: "pending" },
-    { id: "2", label: "Clustering", status: "pending" },
-    { id: "3", label: "Sanering", status: "pending" },
-    { id: "4", label: "Compliance", status: "pending" },
+    { id: "1", label: "Bestanden inlezen", status: "pending" },
+    { id: "2", label: "Analyseren", status: "pending" },
+    { id: "3", label: "Clusteren", status: "pending" },
+    { id: "4", label: "Resultaten genereren", status: "pending" },
   ]);
 
   const handlePolicyUpload = useCallback((files: File[]) => {
@@ -100,7 +103,16 @@ const Index = () => {
     setConditionsFile({ name: file.name, size: file.size });
     toast({
       title: "Voorwaarden geüpload",
-      description: `${file.name} is succesvol toegevoegd.`,
+      description: `${file.name} is toegevoegd.`,
+    });
+  }, [toast]);
+
+  const handleClauseLibraryUpload = useCallback((files: File[]) => {
+    const file = files[0];
+    setClauseLibraryFile({ name: file.name, size: file.size });
+    toast({
+      title: "Clausulebibliotheek geüpload",
+      description: `${file.name} is toegevoegd.`,
     });
   }, [toast]);
 
@@ -129,21 +141,21 @@ const Index = () => {
     
     toast({
       title: "Analyse voltooid",
-      description: "Uw resultaten zijn klaar om te bekijken.",
+      description: "De resultaten zijn klaar.",
     });
   }, [toast]);
 
   const handleStartAnalysis = useCallback(() => {
-    if (!policyFile || !conditionsFile) {
+    if (!policyFile) {
       toast({
-        title: "Bestanden ontbreken",
-        description: "Upload eerst zowel het polisbestand als de voorwaarden.",
+        title: "Polisbestand ontbreekt",
+        description: "Upload eerst het polisbestand om te starten.",
         variant: "destructive",
       });
       return;
     }
     simulateAnalysis();
-  }, [policyFile, conditionsFile, simulateAnalysis, toast]);
+  }, [policyFile, simulateAnalysis, toast]);
 
   const handleDownload = useCallback(() => {
     toast({
@@ -152,7 +164,7 @@ const Index = () => {
     });
   }, [toast]);
 
-  const canStartAnalysis = policyFile && conditionsFile && !isAnalyzing;
+  const canStartAnalysis = policyFile && !isAnalyzing;
 
   return (
     <div className="min-h-screen bg-background">
@@ -162,12 +174,13 @@ const Index = () => {
       />
 
       <main className="container max-w-7xl mx-auto px-4 pb-12">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left Column - Input */}
-          <div className="lg:col-span-4 space-y-6">
+        {/* Input Section - Full Width */}
+        <div className="space-y-6 mb-8">
+          {/* Upload Row - 3 cards horizontal */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <FileDropZone
-              title="Polisbestand"
-              description="Sleep uw Excel/CSV bestand hier"
+              title="1. Polisbestand"
+              description="Sleep Excel/CSV bestand"
               accept=".xlsx,.xls,.csv"
               onFileSelect={handlePolicyUpload}
               status={policyFile ? "success" : "idle"}
@@ -176,8 +189,8 @@ const Index = () => {
             />
 
             <FileDropZone
-              title="Voorwaarden & Clausules"
-              description="Sleep voorwaarden PDF/TXT hier"
+              title="2. Voorwaarden"
+              description="Sleep PDF/TXT/DOCX"
               accept=".pdf,.txt,.docx"
               onFileSelect={handleConditionsUpload}
               status={conditionsFile ? "success" : "idle"}
@@ -185,27 +198,44 @@ const Index = () => {
               className="animate-fade-up animation-delay-100"
             />
 
-            <Button
-              onClick={handleStartAnalysis}
-              disabled={!canStartAnalysis}
-              className={cn(
-                "btn-primary-cta w-full h-14 text-sm rounded-xl",
-                "animate-fade-up animation-delay-200"
-              )}
-            >
-              {isAnalyzing ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
-                <>
-                  <Play className="w-5 h-5 mr-2" />
-                  Start Analyse
-                </>
-              )}
-            </Button>
+            <FileDropZone
+              title="3. Clausulebibliotheek"
+              description="Upload bibliotheek"
+              accept=".xlsx,.xls,.csv,.pdf,.docx"
+              onFileSelect={handleClauseLibraryUpload}
+              status={clauseLibraryFile ? "success" : "idle"}
+              uploadedFile={clauseLibraryFile}
+              className="animate-fade-up animation-delay-150"
+            />
           </div>
 
-          {/* Right Column - Output */}
-          <div className="lg:col-span-8 space-y-6">
+          <ExtraInstructionInput
+            value={extraInstruction}
+            onChange={setExtraInstruction}
+            className="animate-fade-up animation-delay-200"
+          />
+
+          <Button
+            onClick={handleStartAnalysis}
+            disabled={!canStartAnalysis}
+            className={cn(
+              "btn-primary-cta w-full md:w-auto md:min-w-[200px] h-14 text-sm rounded-xl",
+              "animate-fade-up animation-delay-300"
+            )}
+          >
+            {isAnalyzing ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <>
+                <Play className="w-5 h-5 mr-2" />
+                Start Analyse
+              </>
+            )}
+          </Button>
+        </div>
+
+        {/* Output Section */}
+        <div className="space-y-6">
             {/* Metrics Row */}
             {analysisComplete && (
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 animate-fade-up">
@@ -268,14 +298,13 @@ const Index = () => {
                   Klaar om te starten
                 </h3>
                 <p className="text-muted-foreground max-w-md">
-                  Upload uw polisbestand en voorwaarden om de analyse te starten.
+                  Upload het polisbestand om de analyse te starten.
                   De resultaten verschijnen hier.
                 </p>
               </div>
             )}
           </div>
-        </div>
-      </main>
+        </main>
 
       {/* Dialogs */}
       <SettingsDrawer

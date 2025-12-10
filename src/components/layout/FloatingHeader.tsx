@@ -1,6 +1,7 @@
-import { Settings, HelpCircle, Shield } from "lucide-react";
+import { Settings, HelpCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import hienfeldLogo from "@/assets/hienfeld-logo.png";
 
 interface FloatingHeaderProps {
   onSettingsClick?: () => void;
@@ -13,15 +14,14 @@ export const FloatingHeader = ({ onSettingsClick, onHelpClick }: FloatingHeaderP
       <div className="flex items-center justify-between">
         {/* Logo & Title */}
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary/80 flex items-center justify-center shadow-lg">
-            <Shield className="w-5 h-5 text-primary-foreground" />
-          </div>
-          <div>
-            <h1 className="text-lg font-bold text-foreground tracking-tight">
-              VB Converter
-            </h1>
-            <p className="text-xs text-muted-foreground">by Hienfeld</p>
-          </div>
+          <img 
+            src={hienfeldLogo} 
+            alt="Hienfeld Logo" 
+            className="h-10 w-auto"
+          />
+          <h1 className="text-lg font-bold text-foreground tracking-tight">
+            VB Converter
+          </h1>
         </div>
 
         {/* Actions */}
