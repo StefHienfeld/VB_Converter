@@ -232,3 +232,30 @@ Vb agent/
 ---
 
 *Versie 3.0 - Hienfeld - 2025*
+
+---
+
+# 🧪 Floating Glass Converter (Lovable project)
+
+Dit repository bevat ook de Lovable-app uit `floating-glass-converter`. Kernpunten:
+
+- **Stack:** Vite, TypeScript, React, shadcn-ui, Tailwind CSS.
+- **Doel:** Lovable project dat je via Lovable of lokaal kunt bewerken.
+- **Project URL:** https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+
+## Lokale ontwikkeling (frontend)
+
+```sh
+git clone <YOUR_GIT_URL>
+cd <YOUR_PROJECT_NAME>
+npm install
+npm run dev
+```
+
+## Werken via Lovable
+
+Open de [Lovable Project pagina](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) en prompt direct; wijzigingen worden automatisch gecommit.
+
+## Deploy
+
+Publiceren kan via Lovable: Share -> Publish. Voor een custom domein: Project > Settings > Domains > Connect Domain (zie https://docs.lovable.dev/features/custom-domain#custom-domain).
