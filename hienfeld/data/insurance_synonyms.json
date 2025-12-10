@@ -1,0 +1,183 @@
+{
+  "voertuig": {
+    "canonical": "voertuig",
+    "synonyms": ["auto", "personenauto", "wagen", "motorvoertuig", "voertuigen", "auto's", "motorrijtuig", "personenwagen"]
+  },
+  "woning": {
+    "canonical": "woning",
+    "synonyms": ["huis", "pand", "woonhuis", "gebouw", "woningen", "huizen", "opstal", "woongebouw"]
+  },
+  "verzekerd": {
+    "canonical": "verzekerd",
+    "synonyms": ["gedekt", "meeverzekerd", "verzekerde", "gedekte", "verzekerden", "gedekten", "covered"]
+  },
+  "verzekering": {
+    "canonical": "verzekering",
+    "synonyms": ["dekking", "polis", "verzekeringsovereenkomst", "contract", "polisvoorwaarden"]
+  },
+  "schade": {
+    "canonical": "schade",
+    "synonyms": ["beschadiging", "letsel", "verlies", "schades", "beschadigingen", "averij", "damage"]
+  },
+  "eigen_risico": {
+    "canonical": "eigen risico",
+    "synonyms": ["franchise", "eigenrisico", "eigen-risico", "drempel", "excess"]
+  },
+  "premie": {
+    "canonical": "premie",
+    "synonyms": ["kosten", "bijdrage", "verzekeringspremie", "premies", "jaarpremie", "maandpremie"]
+  },
+  "brand": {
+    "canonical": "brand",
+    "synonyms": ["brandschade", "vuur", "vlam", "ontbranding", "brandgevaar", "brandstichting"]
+  },
+  "diefstal": {
+    "canonical": "diefstal",
+    "synonyms": ["inbraak", "roof", "beroving", "ontvreemding", "stelen", "gestolen", "diefstalschade"]
+  },
+  "water": {
+    "canonical": "water",
+    "synonyms": ["waterschade", "lekkage", "overstroming", "vloed", "neerslag", "regen"]
+  },
+  "storm": {
+    "canonical": "storm",
+    "synonyms": ["stormschade", "windschade", "hagel", "hagelschade", "orkaan", "noodweer"]
+  },
+  "aansprakelijk": {
+    "canonical": "aansprakelijk",
+    "synonyms": ["aansprakelijkheid", "verantwoordelijk", "liability", "wettelijke aansprakelijkheid", "wettelijk aansprakelijk"]
+  },
+  "vergoeding": {
+    "canonical": "vergoeding",
+    "synonyms": ["uitkering", "betaling", "compensatie", "schadeloosstelling", "tegemoetkoming", "vergoedingen"]
+  },
+  "inboedel": {
+    "canonical": "inboedel",
+    "synonyms": ["huisraad", "inventaris", "roerende zaken", "meubels", "huishoudelijke artikelen", "stoffering"]
+  },
+  "opstal": {
+    "canonical": "opstal",
+    "synonyms": ["gebouw", "onroerend goed", "bouwwerk", "constructie", "bebouwing"]
+  },
+  "herbouwwaarde": {
+    "canonical": "herbouwwaarde",
+    "synonyms": ["nieuwwaarde", "vervangingswaarde", "nieuwbouwwaarde", "bouwkosten"]
+  },
+  "dagwaarde": {
+    "canonical": "dagwaarde",
+    "synonyms": ["actuele waarde", "marktwaarde", "huidige waarde", "werkelijke waarde"]
+  },
+  "clausule": {
+    "canonical": "clausule",
+    "synonyms": ["bepaling", "voorwaarde", "artikel", "clausules", "bepalingen", "beding"]
+  },
+  "uitsluiting": {
+    "canonical": "uitsluiting",
+    "synonyms": ["uitgesloten", "niet gedekt", "exclusie", "uitsluitingen", "niet verzekerd"]
+  },
+  "molest": {
+    "canonical": "molest",
+    "synonyms": ["terrorisme", "oorlog", "oproer", "binnenlandse onlusten", "gewapend conflict"]
+  },
+  "fraude": {
+    "canonical": "fraude",
+    "synonyms": ["misleiding", "bedrog", "oplichting", "valse voorstelling", "verzekeringsfraude"]
+  },
+  "evacuatie": {
+    "canonical": "evacuatie",
+    "synonyms": ["ontruiming", "gedwongen verhuizing", "noodgedwongen vertrek", "verlaten"]
+  },
+  "verblijf": {
+    "canonical": "verblijf",
+    "synonyms": ["wonen", "bewoning", "huisvesting", "onderdak", "tijdelijk verblijf"]
+  },
+  "taxatie": {
+    "canonical": "taxatie",
+    "synonyms": ["waardering", "schatting", "taxatierapport", "waardebepaling", "getaxeerd"]
+  },
+  "juwelen": {
+    "canonical": "juwelen",
+    "synonyms": ["sieraden", "horloges", "lijfsieraden", "kostbaarheden", "edelstenen"]
+  },
+  "glas": {
+    "canonical": "glas",
+    "synonyms": ["glasschade", "ruiten", "beglazing", "glasbreuk", "vensters"]
+  },
+  "rechtsbijstand": {
+    "canonical": "rechtsbijstand",
+    "synonyms": ["juridische hulp", "rechtshulp", "advocaatkosten", "juridische bijstand"]
+  },
+  "reis": {
+    "canonical": "reis",
+    "synonyms": ["vakantie", "reizen", "trip", "uitstapje", "toerisme"]
+  },
+  "annulering": {
+    "canonical": "annulering",
+    "synonyms": ["annuleringskosten", "afzegging", "afgelasting", "cancellation"]
+  },
+  "medisch": {
+    "canonical": "medisch",
+    "synonyms": ["gezondheid", "ziektekosten", "medische kosten", "gezondheidszorg", "zorg"]
+  },
+  "buitenland": {
+    "canonical": "buitenland",
+    "synonyms": ["internationaal", "wereldwijd", "europa", "buiten nederland", "overzee"]
+  },
+  "huurder": {
+    "canonical": "huurder",
+    "synonyms": ["huur", "verhuur", "verhuurd", "huurbewoner", "huursituatie"]
+  },
+  "eigenaar": {
+    "canonical": "eigenaar",
+    "synonyms": ["bezitter", "eigendom", "huiseigenaar", "pandeigenaar", "bezit"]
+  },
+  "bedrijf": {
+    "canonical": "bedrijf",
+    "synonyms": ["onderneming", "organisatie", "firma", "vennootschap", "werkgever", "zakelijk"]
+  },
+  "particulier": {
+    "canonical": "particulier",
+    "synonyms": ["privé", "consument", "persoonlijk", "niet-zakelijk"]
+  },
+  "maximum": {
+    "canonical": "maximum",
+    "synonyms": ["maximaal", "limiet", "plafond", "bovengrens", "max"]
+  },
+  "minimum": {
+    "canonical": "minimum",
+    "synonyms": ["minimaal", "ondergrens", "drempel", "min"]
+  },
+  "jaar": {
+    "canonical": "jaar",
+    "synonyms": ["jaarlijks", "per jaar", "jaarbasis", "p.a.", "12 maanden"]
+  },
+  "geldig": {
+    "canonical": "geldig",
+    "synonyms": ["van kracht", "actief", "lopend", "geldend", "van toepassing"]
+  },
+  "vervallen": {
+    "canonical": "vervallen",
+    "synonyms": ["verlopen", "beëindigd", "geëindigd", "niet meer geldig", "afgelopen"]
+  },
+  "alarm": {
+    "canonical": "alarm",
+    "synonyms": ["inbraakalarm", "beveiligingssysteem", "alarminstallatie", "detectie", "beveiliging"]
+  },
+  "kluis": {
+    "canonical": "kluis",
+    "synonyms": ["brandkast", "safe", "waardekluis", "kluisverzekering"]
+  },
+  "schadevrij": {
+    "canonical": "schadevrij",
+    "synonyms": ["no claim", "schadevrije jaren", "bonus malus", "claimvrij"]
+  },
+  "opzet": {
+    "canonical": "opzet",
+    "synonyms": ["opzettelijk", "met opzet", "moedwillig", "bewust"]
+  },
+  "grove_schuld": {
+    "canonical": "grove schuld",
+    "synonyms": ["nalatigheid", "roekeloosheid", "ernstige schuld", "grove nalatigheid"]
+  }
+}
+

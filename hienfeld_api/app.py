@@ -42,13 +42,20 @@ from hienfeld.services.policy_parser_service import PolicyParserService
 from hienfeld.services.preprocessing_service import PreprocessingService
 from hienfeld.services.similarity_service import RapidFuzzSimilarityService
 
-
 # ---------------------------------------------------------------------------
 # Logging & app setup
 # ---------------------------------------------------------------------------
 
 setup_logging()
 logger = get_logger("api")
+
+# Semantic enhancement services (v3.0 - optional)
+try:
+    from hienfeld.services.hybrid_similarity_service import HybridSimilarityService
+    HYBRID_AVAILABLE = True
+except ImportError:
+    HYBRID_AVAILABLE = False
+    logger.info("Hybrid similarity service not available (install spacy, gensim, wn)")
 
 app = FastAPI(title="Hienfeld VB Converter API", version="1.0.0")
 
@@ -211,9 +218,23 @@ def _run_analysis_job(
         multi_clause = MultiClauseDetectionService(config)
         clustering = ClusteringService(config, similarity_service=similarity_service)
         admin_check = AdminCheckService(config=config, llm_client=None, enable_ai_checks=False)
-        analysis = AnalysisService(config, admin_check_service=admin_check)
         export = ExportService(config)
         clause_library_service = ClauseLibraryService(config)
+        
+        # Initialize hybrid similarity service (v3.0 semantic enhancement)
+        hybrid_service = None
+        if HYBRID_AVAILABLE and config.semantic.enabled:
+            try:
+                hybrid_service = HybridSimilarityService(config)
+                logger.info("Hybrid similarity service initialized (semantic enhancement enabled)")
+            except Exception as e:
+                logger.warning(f"Could not initialize hybrid similarity: {e}")
+        
+        analysis = AnalysisService(
+            config, 
+            admin_check_service=admin_check,
+            hybrid_similarity_service=hybrid_service
+        )
 
         # Step 1: Load policy file
         _update_job(job, progress=5, message="📄 Bestand inlezen...")

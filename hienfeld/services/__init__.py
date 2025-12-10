@@ -10,6 +10,12 @@ from .export_service import ExportService
 from .clause_library_service import ClauseLibraryService
 from .admin_check_service import AdminCheckService
 
+# Semantic enhancement services (v3.0)
+from .nlp_service import NLPService
+from .synonym_service import SynonymService
+from .document_similarity_service import DocumentSimilarityService
+from .hybrid_similarity_service import HybridSimilarityService
+
 __all__ = [
     'IngestionService',
     'PreprocessingService', 
@@ -22,6 +28,11 @@ __all__ = [
     'AnalysisService',
     'ExportService',
     'ClauseLibraryService',
-    'AdminCheckService'
+    'AdminCheckService',
+    # Semantic enhancement services
+    'NLPService',
+    'SynonymService',
+    'DocumentSimilarityService',
+    'HybridSimilarityService',
 ]
 

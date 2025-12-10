@@ -247,8 +247,40 @@ class ExportConfig:
 
 
 @dataclass
+class SemanticConfig:
+    """Configuration for semantic analysis (no external APIs required)."""
+    # Master switch for semantic features
+    enabled: bool = True
+    
+    # Sentence embeddings (sentence-transformers)
+    enable_embeddings: bool = True
+    embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"  # Good for Dutch
+    
+    # SpaCy NLP (lemmatization, NER)
+    enable_nlp: bool = True
+    spacy_model: str = "nl_core_news_md"  # Dutch medium model
+    
+    # TF-IDF document similarity
+    enable_tfidf: bool = True
+    
+    # Synonym expansion
+    enable_synonyms: bool = True
+    
+    # Hybrid similarity weights
+    weight_rapidfuzz: float = 0.25
+    weight_lemmatized: float = 0.20
+    weight_tfidf: float = 0.15
+    weight_synonyms: float = 0.15
+    weight_embeddings: float = 0.25
+    
+    # Thresholds
+    semantic_match_threshold: float = 0.70
+    semantic_high_threshold: float = 0.80
+
+
+@dataclass
 class AIConfig:
-    """Configuration for AI/ML features (optional)."""
+    """Configuration for AI/ML features (optional - requires API keys)."""
     enabled: bool = False
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     vector_store_type: str = "faiss"
@@ -266,11 +298,12 @@ class AppConfig:
     cluster_naming: ClusterNamingConfig = field(default_factory=ClusterNamingConfig)
     ingestion: IngestionConfig = field(default_factory=IngestionConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
+    semantic: SemanticConfig = field(default_factory=SemanticConfig)
     ai: AIConfig = field(default_factory=AIConfig)
     
     # UI settings
     app_title: str = "Hienfeld VB Converter"
-    app_version: str = "2.0.0"
+    app_version: str = "3.0.0"  # Semantic enhancement
 
 
 def load_config(config_path: Optional[str] = None) -> AppConfig:

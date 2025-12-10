@@ -39,10 +39,22 @@ pywin32>=306; sys_platform == 'win32'
 rapidfuzz>=3.0.0
 
 # -------------------------
-# AI / LLM (optional)
+# NLP & Semantic Analysis (local, no API required)
+# -------------------------
+spacy>=3.7.0
+# Dutch model: python -m spacy download nl_core_news_md
+gensim>=4.3.0
+wn>=0.9.0
+
+# -------------------------
+# Sentence Embeddings (local)
 # -------------------------
 sentence-transformers>=2.2.0
 faiss-cpu>=1.7.4
+
+# -------------------------
+# AI / LLM (optional - requires API keys)
+# -------------------------
 openai>=1.0.0
 
 # -------------------------

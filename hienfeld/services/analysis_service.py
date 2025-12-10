@@ -20,6 +20,13 @@ from ..utils.text_normalization import simplify_text
 from ..services.similarity_service import RapidFuzzSimilarityService, SimilarityService, SemanticSimilarityService, SemanticMatch
 from ..logging_config import get_logger
 
+# Optional hybrid similarity (semantic enhancement)
+try:
+    from ..services.hybrid_similarity_service import HybridSimilarityService
+    HYBRID_AVAILABLE = True
+except ImportError:
+    HYBRID_AVAILABLE = False
+
 logger = get_logger('analysis_service')
 
 
@@ -76,6 +83,7 @@ class AnalysisService:
         ai_analyzer=None,
         similarity_service: Optional[SimilarityService] = None,
         semantic_similarity_service: Optional[SemanticSimilarityService] = None,
+        hybrid_similarity_service=None,
         clause_library_service=None,
         admin_check_service=None
     ):
@@ -87,6 +95,7 @@ class AnalysisService:
             ai_analyzer: Optional AI analyzer service for enhanced analysis
             similarity_service: Service for computing text similarity (RapidFuzz)
             semantic_similarity_service: Service for semantic/meaning-based comparison
+            hybrid_similarity_service: Optional HybridSimilarityService for enhanced matching
             clause_library_service: Service for clause library lookups
             admin_check_service: Service for administrative/hygiene checks (Step 0)
         """
@@ -106,6 +115,10 @@ class AnalysisService:
         # Semantic similarity service (embedding-based)
         self.semantic_similarity_service = semantic_similarity_service
         self._semantic_index_ready = False
+        
+        # Hybrid similarity service (v3.0 semantic enhancement)
+        self.hybrid_similarity_service = hybrid_similarity_service
+        self._hybrid_enabled = hybrid_similarity_service is not None
         
         # Cache for policy sections
         self._policy_sections: List[PolicyDocumentSection] = []
@@ -130,6 +143,17 @@ class AnalysisService:
         """
         self.semantic_similarity_service = service
         logger.info("Semantic similarity service configured for analysis")
+    
+    def set_hybrid_similarity_service(self, service) -> None:
+        """
+        Set the hybrid similarity service for enhanced multi-method matching.
+        
+        Args:
+            service: HybridSimilarityService instance
+        """
+        self.hybrid_similarity_service = service
+        self._hybrid_enabled = service is not None
+        logger.info("Hybrid similarity service configured for analysis (v3.0 semantic enhancement)")
     
     def _index_sections_for_semantic_search(self) -> None:
         """
@@ -204,6 +228,13 @@ class AnalysisService:
                 s.simplified_text for s in self._policy_sections if s.simplified_text
             )
             logger.info(f"Loaded {len(self._policy_sections)} policy sections for comparison")
+            
+            # Train hybrid similarity (TF-IDF) on voorwaarden if available
+            if self.hybrid_similarity_service:
+                section_texts = [s.simplified_text for s in self._policy_sections if s.simplified_text]
+                if section_texts:
+                    self.hybrid_similarity_service.train_tfidf(section_texts)
+                    logger.info(f"✅ Hybrid similarity trained on {len(section_texts)} sections")
         else:
             self._policy_full_text = ""
             logger.warning("⚠️ GEEN VOORWAARDEN GELADEN - Step 2 wordt overgeslagen")
@@ -229,6 +260,15 @@ class AnalysisService:
                 logger.warning("⚠️ Semantic indexing failed - Step 2b wordt overgeslagen")
         else:
             logger.info("ℹ️ Semantic similarity service not configured - alleen tekstuele matching")
+        
+        # Log hybrid similarity status (v3.0)
+        if self._hybrid_enabled:
+            stats_info = self.hybrid_similarity_service.get_statistics() if hasattr(self.hybrid_similarity_service, 'get_statistics') else {}
+            services_available = stats_info.get('services_available', {})
+            active_methods = [k for k, v in services_available.items() if v]
+            logger.info(f"✅ Hybrid similarity enabled: {', '.join(active_methods) if active_methods else 'basic'}")
+        else:
+            logger.info("ℹ️ Hybrid similarity not configured - using RapidFuzz only")
         
         advice_map: Dict[str, AnalysisAdvice] = {}
         total = len(clusters)
@@ -777,7 +817,11 @@ class AnalysisService:
         self, 
         text: str
     ) -> Optional[Tuple[float, PolicyDocumentSection]]:
-        """Find the best matching section in the conditions."""
+        """
+        Find the best matching section in the conditions.
+        
+        Uses hybrid similarity if available, otherwise falls back to RapidFuzz.
+        """
         if not self._policy_sections:
             return None
         
@@ -788,7 +832,12 @@ class AnalysisService:
             if not section.simplified_text:
                 continue
             
-            score = self.similarity_service.similarity(text, section.simplified_text)
+            # Use hybrid similarity if available (combines multiple methods)
+            if self._hybrid_enabled and self.hybrid_similarity_service:
+                score = self.hybrid_similarity_service.similarity(text, section.simplified_text)
+            else:
+                # Fallback to RapidFuzz only
+                score = self.similarity_service.similarity(text, section.simplified_text)
             
             if score > best_score:
                 best_score = score
