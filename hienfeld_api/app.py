@@ -210,6 +210,18 @@ def _run_analysis_job(
         # Load base config and apply settings from the request
         config = load_config()
 
+        # Apply analysis mode (FAST/BALANCED/ACCURATE)
+        from hienfeld.config import AnalysisMode
+        analysis_mode_str = settings.get("analysis_mode", "balanced")
+        try:
+            mode = AnalysisMode(analysis_mode_str)
+            config.semantic.apply_mode(mode)
+            logger.info(f"Analysis mode: {mode.value} (time_multiplier: {config.semantic.get_active_config().time_multiplier}x)")
+        except ValueError:
+            logger.warning(f"Invalid analysis mode '{analysis_mode_str}', defaulting to BALANCED")
+            mode = AnalysisMode.BALANCED
+            config.semantic.apply_mode(mode)
+
         strictness_float = float(settings.get("cluster_accuracy", 90)) / 100.0
         min_freq = int(settings.get("min_frequency", 20))
         win_size = int(settings.get("window_size", 100))
@@ -221,12 +233,15 @@ def _run_analysis_job(
         config.analysis_rules.frequency_standardize_threshold = min_freq
         config.clustering.leader_window_size = win_size if use_window_limit else 999999
 
-        similarity_service = RapidFuzzSimilarityService(threshold=strictness_float)
+        # Base similarity service for clustering (will be upgraded to hybrid if available)
+        base_similarity_service = RapidFuzzSimilarityService(threshold=strictness_float)
         ingestion = IngestionService(config)
         preprocessing = PreprocessingService(config)
         policy_parser = PolicyParserService(config)
         multi_clause = MultiClauseDetectionService(config)
-        clustering = ClusteringService(config, similarity_service=similarity_service)
+        
+        # Create clustering service - will use hybrid service later if available
+        clustering = ClusteringService(config, similarity_service=base_similarity_service)
         admin_check = AdminCheckService(config=config, llm_client=None, enable_ai_checks=False)
         export = ExportService(config)
         clause_library_service = ClauseLibraryService(config)
@@ -260,16 +275,19 @@ def _run_analysis_job(
 
         # Initialize semantic stack (embeddings, RAG, TF-IDF) if requested and possible
         semantic_stack_active = False
-        if use_conditions and policy_sections and use_semantic and config.semantic.enabled:
-            # Train TF-IDF on voorwaarden (if available)
-            if tfidf_service.is_available:
+        
+        # Initialize semantic services for clustering (independent of conditions)
+        if use_semantic and config.semantic.enabled:
+            # Train TF-IDF on voorwaarden (if available and we have conditions)
+            if policy_sections and tfidf_service.is_available and config.semantic.enable_tfidf:
                 tfidf_corpus = [s.simplified_text for s in policy_sections if s.simplified_text]
                 if tfidf_corpus:
                     tfidf_service.train_on_corpus(tfidf_corpus)
-            else:
-                logger.debug("TF-IDF service not available; skipping training")
-
-            # Embeddings + vector store + RAG
+                    logger.info(f"✅ TF-IDF trained on {len(tfidf_corpus)} policy sections")
+                else:
+                    logger.warning("⚠️ No text in policy sections for TF-IDF training")
+            
+            # Embeddings + vector store (for clustering similarity)
             if config.semantic.enable_embeddings:
                 try:
                     embeddings_service = create_embeddings_service(
@@ -327,10 +345,19 @@ def _run_analysis_job(
         # Initialize hybrid similarity service (v3.0 semantic enhancement)
         if HYBRID_AVAILABLE and config.semantic.enabled and use_semantic:
             try:
+                # Get active mode configuration
+                mode_config = config.semantic.get_active_config()
+
+                # Enable embedding cache if configured
+                if mode_config.use_embedding_cache and semantic_service:
+                    semantic_service.enable_cache(mode_config.cache_size)
+                    logger.info(f"✅ Embedding cache enabled: {mode_config.cache_size} entries")
+
+                # Create hybrid service with mode-aware config (only enabled services)
                 hybrid_service = HybridSimilarityService(
                     config,
-                    tfidf_service=tfidf_service,
-                    semantic_service=semantic_service,
+                    tfidf_service=tfidf_service if mode_config.enable_tfidf else None,
+                    semantic_service=semantic_service if mode_config.enable_embeddings else None,
                 )
 
                 # Check which semantic services are actually available
@@ -357,6 +384,21 @@ def _run_analysis_job(
                     logger.info(
                         f"✅ Hybrid similarity actief met {semantic_count} semantische services: {active_methods}"
                     )
+                    
+                    # Log detailed mode configuration for debugging
+                    logger.info(f"📊 Mode weights: RapidFuzz={mode_config.weight_rapidfuzz:.0%}, "
+                               f"Lemma={mode_config.weight_lemmatized:.0%}, "
+                               f"TF-IDF={mode_config.weight_tfidf:.0%}, "
+                               f"Synonyms={mode_config.weight_synonyms:.0%}, "
+                               f"Embeddings={mode_config.weight_embeddings:.0%}")
+                    logger.info(f"📊 Mode enables: NLP={mode_config.enable_nlp}, "
+                               f"TF-IDF={mode_config.enable_tfidf}, "
+                               f"Synonyms={mode_config.enable_synonyms}, "
+                               f"Embeddings={mode_config.enable_embeddings}")
+                    
+                    # IMPORTANT: Upgrade clustering to use hybrid similarity too!
+                    clustering.similarity_service = hybrid_service
+                    logger.info(f"🔗 Clustering upgraded to hybrid similarity mode: {mode.value.upper()}")
             except Exception as e:
                 logger.warning(f"Could not initialize hybrid similarity: {e}")
                 hybrid_service = None
@@ -366,7 +408,7 @@ def _run_analysis_job(
         analysis = AnalysisService(
             config,
             ai_analyzer=ai_analyzer,
-            similarity_service=similarity_service,
+            similarity_service=base_similarity_service,
             semantic_similarity_service=semantic_service,
             hybrid_similarity_service=hybrid_service,
             clause_library_service=None,
@@ -639,6 +681,7 @@ async def start_analysis(
     use_window_limit: bool = Form(True),
     use_semantic: bool = Form(True),
     ai_enabled: bool = Form(False),  # reserved for future AI extensions
+    analysis_mode: str = Form("balanced"),  # fast, balanced, or accurate
     extra_instruction: str = Form(""),
 ) -> StartAnalysisResponse:
     """
@@ -677,6 +720,7 @@ async def start_analysis(
         "use_window_limit": use_window_limit,
         "use_semantic": use_semantic,
         "ai_enabled": ai_enabled,
+        "analysis_mode": analysis_mode,
         "extra_instruction": extra_instruction,
     }
 

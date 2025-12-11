@@ -11,6 +11,7 @@ export interface StartAnalysisRequest {
     minFrequency: number;
     windowSize: number;
     aiEnabled: boolean;
+    analysisMode?: string;
   };
   extraInstruction?: string;
 }
@@ -75,6 +76,7 @@ function buildFormData(req: StartAnalysisRequest): FormData {
   form.append("use_conditions", String(conditionsFiles.length > 0));
   form.append("use_window_limit", String(true));
   form.append("ai_enabled", String(req.settings.aiEnabled));
+  form.append("analysis_mode", req.settings.analysisMode || "balanced");
   form.append("extra_instruction", req.extraInstruction ?? "");
 
   console.log("[FormData] FormData built successfully");

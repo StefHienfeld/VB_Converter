@@ -820,40 +820,63 @@ class AnalysisService:
     ) -> Optional[Tuple[float, PolicyDocumentSection]]:
         """
         Find the best matching section in the conditions.
-        
-        Uses hybrid similarity if available, otherwise falls back to RapidFuzz.
+
+        Uses hybrid similarity's find_best_match for efficient batch processing.
+        Falls back to loop-based RapidFuzz if hybrid service not available.
         """
         if not self._policy_sections:
             return None
-        
+
+        # OPTIMIZED: Use hybrid service's batch matching
+        if self._hybrid_enabled and self.hybrid_similarity_service:
+            candidates = [s.simplified_text for s in self._policy_sections if s.simplified_text]
+            if not candidates:
+                return None
+
+            match_result = self.hybrid_similarity_service.find_best_match(
+                query=text,
+                candidates=candidates,
+                min_score=self.MEDIUM_SIMILARITY_THRESHOLD
+            )
+
+            if match_result:
+                best_idx, best_score, _ = match_result
+                best_section = self._policy_sections[best_idx]
+
+                # Also check for substring match (exact match bonus)
+                if text in best_section.simplified_text:
+                    substring_score = min(1.0, 0.95 + (len(text) / len(best_section.simplified_text)) * 0.05)
+                    if substring_score > best_score:
+                        best_score = substring_score
+
+                return (best_score, best_section)
+
+            return None
+
+        # FALLBACK: Loop-based RapidFuzz matching (when hybrid not available)
         best_score = 0.0
         best_section = None
-        
+
         for section in self._policy_sections:
             if not section.simplified_text:
                 continue
-            
-            # Use hybrid similarity if available (combines multiple methods)
-            if self._hybrid_enabled and self.hybrid_similarity_service:
-                score = self.hybrid_similarity_service.similarity(text, section.simplified_text)
-            else:
-                # Fallback to RapidFuzz only
-                score = self.similarity_service.similarity(text, section.simplified_text)
-            
+
+            score = self.similarity_service.similarity(text, section.simplified_text)
+
             if score > best_score:
                 best_score = score
                 best_section = section
-            
+
             # Also check substring match
             if text in section.simplified_text:
                 substring_score = min(1.0, 0.95 + (len(text) / len(section.simplified_text)) * 0.05)
                 if substring_score > best_score:
                     best_score = substring_score
                     best_section = section
-        
+
         if best_section and best_score >= self.MEDIUM_SIMILARITY_THRESHOLD:
             return (best_score, best_section)
-        
+
         return None
     
     def _find_matching_article(self, text: str) -> Optional[str]:

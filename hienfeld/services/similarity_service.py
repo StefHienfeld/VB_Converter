@@ -301,13 +301,18 @@ class SemanticSimilarityService:
         self.model_name = model_name
         self._embeddings_service = embeddings_service
         self._available = False
-        
+
         # Index storage for pre-computed embeddings
         self._indexed_texts: Dict[str, str] = {}  # id -> text
         self._indexed_embeddings: Optional[np.ndarray] = None  # shape: (n, dim)
         self._indexed_ids: List[str] = []  # ordered list of IDs
         self._indexed_metadata: Dict[str, Dict[str, Any]] = {}  # id -> metadata
-        
+
+        # Embedding cache (enabled via enable_cache())
+        self._embedding_cache_enabled = False
+        self._embedding_cache_size = 5000
+        self._cached_embed_single = None
+
         # Try to initialize
         self._init_embeddings_service()
     
@@ -329,25 +334,25 @@ class SemanticSimilarityService:
     def similarity(self, a: str, b: str) -> float:
         """
         Compute semantic similarity between two strings.
-        
+
         Uses cosine similarity of embeddings to measure how similar
         the MEANING of two texts is.
-        
+
         Args:
             a: First string
             b: Second string
-            
+
         Returns:
             Semantic similarity score between 0.0 and 1.0
         """
         if not self._available or not a or not b:
             return 0.0
-        
+
         try:
-            # Generate embeddings for both texts
-            emb_a = self._embeddings_service.embed_single(a)
-            emb_b = self._embeddings_service.embed_single(b)
-            
+            # Generate embeddings for both texts (uses cache if enabled)
+            emb_a = self._get_embedding(a)
+            emb_b = self._get_embedding(b)
+
             # Compute cosine similarity
             return self._cosine_similarity(emb_a, emb_b)
         except Exception:
@@ -412,10 +417,10 @@ class SemanticSimilarityService:
             return []
         
         min_score = min_score if min_score is not None else self.threshold
-        
-        # Generate query embedding
-        query_embedding = self._embeddings_service.embed_single(query_text)
-        
+
+        # Generate query embedding (uses cache if enabled)
+        query_embedding = self._get_embedding(query_text)
+
         # Compute similarities with all indexed texts
         similarities = self._cosine_similarity_batch(
             query_embedding, 
@@ -485,7 +490,96 @@ class SemanticSimilarityService:
         
         # Dot product gives cosine similarity for normalized vectors
         return np.dot(corpus_normalized, query_norm)
-    
+
+    def enable_cache(self, cache_size: int = 5000) -> None:
+        """
+        Enable LRU caching for embeddings.
+
+        This significantly improves performance when the same texts
+        are embedded multiple times (common in clustering and matching).
+
+        Args:
+            cache_size: Maximum number of embeddings to cache
+        """
+        from functools import lru_cache
+
+        # Create cached wrapper around embed_single
+        @lru_cache(maxsize=cache_size)
+        def _cached_embed_single(text: str) -> tuple:
+            """Cache wrapper for embed_single. Returns tuple for hashability."""
+            emb = self._embeddings_service.embed_single(text)
+            return tuple(emb.tolist())
+
+        self._cached_embed_single = _cached_embed_single
+        self._embedding_cache_enabled = True
+        self._embedding_cache_size = cache_size
+
+    def _get_embedding(self, text: str) -> np.ndarray:
+        """
+        Get embedding for text with optional caching.
+
+        Uses cache if enabled, otherwise calls embed_single directly.
+
+        Args:
+            text: Text to embed
+
+        Returns:
+            Embedding vector as numpy array
+        """
+        if not self._embedding_cache_enabled or self._cached_embed_single is None:
+            return self._embeddings_service.embed_single(text)
+
+        # Get from cache (returns tuple)
+        cached_tuple = self._cached_embed_single(text)
+        return np.array(cached_tuple, dtype=np.float32)
+
+    def similarity_batch(
+        self,
+        query: str,
+        candidates: List[str],
+        min_score: float = None
+    ) -> List[Tuple[int, float]]:
+        """
+        Compute similarity for one query vs many candidates efficiently.
+
+        This is much faster than calling similarity() in a loop because:
+        1. Query embedding is computed only once
+        2. Candidate embeddings are batched
+        3. Cosine similarities are vectorized
+
+        Args:
+            query: Query text
+            candidates: List of candidate texts
+            min_score: Optional minimum score filter
+
+        Returns:
+            List of (index, score) tuples for candidates above min_score,
+            sorted by score descending
+        """
+        if not self._available or not candidates:
+            return []
+
+        min_score = min_score if min_score is not None else self.threshold
+
+        # Get query embedding (uses cache if enabled)
+        query_emb = self._get_embedding(query)
+
+        # Batch embed candidates
+        candidate_embs = self._embeddings_service.embed_texts(candidates)
+
+        # Compute all similarities at once
+        similarities = self._cosine_similarity_batch(query_emb, candidate_embs)
+
+        # Filter and sort
+        results = [
+            (idx, float(score))
+            for idx, score in enumerate(similarities)
+            if score >= min_score
+        ]
+        results.sort(key=lambda x: x[1], reverse=True)
+
+        return results
+
     def clear_index(self) -> None:
         """Clear the indexed texts."""
         self._indexed_texts = {}

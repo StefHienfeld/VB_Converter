@@ -91,9 +91,10 @@ class SentenceTransformerEmbeddingsService:
                 cache_folder = Path.home() / ".cache" / "huggingface" / "hub"
                 model_exists = False
                 if cache_folder.exists():
-                    # Quick check for model files
+                    # Quick check for model files (case-insensitive comparison)
+                    model_name_normalized = self.model_name.replace("/", "--").lower()
                     for item in cache_folder.glob("*"):
-                        if self.model_name.replace("/", "--") in item.name.lower():
+                        if model_name_normalized in item.name.lower():
                             model_exists = True
                             break
                 

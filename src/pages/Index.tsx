@@ -37,7 +37,10 @@ const Index = () => {
     minFrequency: 20,
     windowSize: 200,
     aiEnabled: true,
+    analysisMode: "balanced" as const,
   });
+
+  const [estimatedRows, setEstimatedRows] = useState<number>(0);
 
   const [progressSteps, setProgressSteps] = useState<
     { id: string; label: string; status: "pending" | "active" | "completed" }[]
@@ -488,6 +491,7 @@ const Index = () => {
         onSettingsChange={(newSettings) =>
           setSettings((prev) => ({ ...prev, ...newSettings }))
         }
+        estimatedRows={estimatedRows}
       />
 
       <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />

@@ -2,6 +2,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { ModeSelector, AnalysisMode } from "./ModeSelector";
 
 interface SettingsDrawerProps {
   open: boolean;
@@ -11,8 +12,10 @@ interface SettingsDrawerProps {
     minFrequency: number;
     windowSize: number;
     aiEnabled: boolean;
+    analysisMode: AnalysisMode;
   };
   onSettingsChange: (settings: Partial<SettingsDrawerProps["settings"]>) => void;
+  estimatedRows?: number;
 }
 
 export const SettingsDrawer = ({
@@ -20,6 +23,7 @@ export const SettingsDrawer = ({
   onClose,
   settings,
   onSettingsChange,
+  estimatedRows,
 }: SettingsDrawerProps) => {
   return (
     <Sheet open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
@@ -31,6 +35,14 @@ export const SettingsDrawer = ({
         </SheetHeader>
 
         <div className="p-6 space-y-8">
+          {/* Analysis Mode Selector */}
+          <ModeSelector
+            value={settings.analysisMode}
+            onChange={(mode) => onSettingsChange({ analysisMode: mode })}
+            estimatedRows={estimatedRows}
+          />
+
+          <div className="border-t border-border" />
           {/* Cluster Accuracy */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">

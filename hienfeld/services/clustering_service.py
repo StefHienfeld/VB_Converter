@@ -89,6 +89,7 @@ class ClusteringService:
         clause_to_cluster: Dict[str, str] = {}
         exact_match_cache: Dict[str, str] = {}  # simplified_text -> cluster_id
         normalized_match_cache: Dict[str, str] = {}  # normalized_text -> cluster_id (NEW!)
+        cluster_normalized_texts: Dict[str, str] = {}  # cluster_id -> normalized_text (for leaders)
         
         cluster_counter = 1
         total = len(sorted_clauses)
@@ -99,21 +100,35 @@ class ClusteringService:
         
         # Lower threshold for normalized text matching (more aggressive clustering)
         normalized_threshold = max(0.80, threshold - 0.05)
-        
+
+        # PRE-COMPUTE: Normalize all texts once (performance optimization)
+        # Avoids recomputing normalization N*W times in the matching loop
+        normalized_texts = {}
+        if self.config.semantic.performance.precompute_normalized_text:
+            logger.debug("Pre-computing normalized texts for all clauses...")
+            normalized_texts = {
+                clause.id: normalize_for_clustering(clause.raw_text)
+                for clause in sorted_clauses
+            }
+            logger.debug(f"Pre-computed {len(normalized_texts)} normalized texts")
+
         for i, clause in enumerate(sorted_clauses):
             # Progress update
             if progress_callback and i % 500 == 0:
                 progress_callback(int(i / total * 100))
             
             text = clause.simplified_text
-            
+
             # Skip very short texts
             if len(text) < min_length:
                 clause_to_cluster[clause.id] = "NVT"
                 continue
-            
-            # Compute normalized version (with placeholders for variables)
-            normalized_text = normalize_for_clustering(clause.raw_text)
+
+            # Get normalized version (pre-computed if available, else compute on-demand)
+            if normalized_texts:
+                normalized_text = normalized_texts.get(clause.id)
+            else:
+                normalized_text = normalize_for_clustering(clause.raw_text)
             
             # STAGE 1: Check exact match cache (O(1) lookup)
             if text in exact_match_cache:
@@ -157,15 +172,23 @@ class ClusteringService:
                 
                 # First try: match on original simplified text
                 similarity = self.similarity_service.similarity(leader_text, text)
-                
+
                 if similarity >= threshold:
                     found_cluster = cluster
                     break
-                
+
                 # Second try: match on normalized text (catches variable differences)
-                leader_normalized = normalize_for_clustering(cluster.original_text)
+                # Use pre-computed normalized text if available
+                if normalized_texts:
+                    leader_normalized = cluster_normalized_texts.get(cluster.id)
+                    if not leader_normalized:
+                        # Fallback: compute on-demand if not in cache (shouldn't happen)
+                        leader_normalized = normalize_for_clustering(cluster.original_text)
+                else:
+                    leader_normalized = normalize_for_clustering(cluster.original_text)
+
                 normalized_similarity = self.similarity_service.similarity(
-                    leader_normalized, 
+                    leader_normalized,
                     normalized_text
                 )
                 
@@ -188,7 +211,7 @@ class ClusteringService:
                 # Create new cluster
                 cluster_id = f"CL-{cluster_counter:04d}"
                 cluster_name = self._generate_cluster_name(clause.raw_text)
-                
+
                 new_cluster = Cluster(
                     id=cluster_id,
                     leader_clause=clause,
@@ -196,11 +219,16 @@ class ClusteringService:
                     frequency=1,
                     name=cluster_name
                 )
-                
+
                 clusters.append(new_cluster)
                 clause_to_cluster[clause.id] = cluster_id
                 exact_match_cache[text] = cluster_id
                 normalized_match_cache[normalized_text] = cluster_id
+
+                # Store normalized text for this cluster leader (performance optimization)
+                if normalized_texts and normalized_text:
+                    cluster_normalized_texts[cluster_id] = normalized_text
+
                 cluster_counter += 1
         
         # Final progress update

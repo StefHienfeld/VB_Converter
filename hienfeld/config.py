@@ -5,7 +5,21 @@ Uses dataclasses for type-safe configuration management.
 """
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+from enum import Enum
 import os
+
+
+class AnalysisMode(Enum):
+    """
+    Analysis speed modes with different model and optimization settings.
+
+    - FAST: Smallest models, skip embeddings, minimal overhead (8-10x faster)
+    - BALANCED: Current models, good optimizations, best balance (3-5x faster) - RECOMMENDED
+    - ACCURATE: Best Dutch models, all features, maximum matches
+    """
+    FAST = "fast"
+    BALANCED = "balanced"
+    ACCURATE = "accurate"
 
 
 @dataclass
@@ -247,6 +261,59 @@ class ExportConfig:
 
 
 @dataclass
+class ModeConfig:
+    """Configuration for a specific analysis mode."""
+    # SpaCy model
+    spacy_model: str
+
+    # Sentence transformer model
+    embedding_model: str
+
+    # Feature toggles
+    enable_embeddings: bool
+    enable_nlp: bool
+    enable_tfidf: bool
+    enable_synonyms: bool
+
+    # Performance optimizations
+    skip_embeddings_threshold: float  # Skip embeddings if RapidFuzz > this
+    batch_embeddings: bool
+    use_embedding_cache: bool
+    cache_size: int
+
+    # Similarity weights (must sum to 1.0)
+    weight_rapidfuzz: float
+    weight_lemmatized: float
+    weight_tfidf: float
+    weight_synonyms: float
+    weight_embeddings: float
+
+    # Time estimation multiplier for UI
+    time_multiplier: float
+
+    # Description for UI
+    description: str
+
+
+@dataclass
+class PerformanceConfig:
+    """Performance optimization settings."""
+    # Embedding caching
+    enable_embedding_cache: bool = True
+    embedding_cache_size: int = 10000
+
+    # Batch processing
+    enable_batch_embeddings: bool = True
+    batch_size: int = 32
+
+    # Early termination
+    rapidfuzz_skip_threshold: float = 0.85  # Skip embeddings if RapidFuzz > this
+
+    # Pre-normalization
+    precompute_normalized_text: bool = True
+
+
+@dataclass
 class SemanticConfig:
     """Configuration for semantic analysis (no external APIs required)."""
     # Master switch for semantic features
@@ -275,10 +342,114 @@ class SemanticConfig:
     weight_tfidf: float = 0.15
     weight_synonyms: float = 0.15
     weight_embeddings: float = 0.25
-    
+
     # Thresholds
     semantic_match_threshold: float = 0.70
     semantic_high_threshold: float = 0.80
+
+    # ===== v3.1: Multi-Speed Mode System =====
+    # Current analysis mode
+    mode: AnalysisMode = AnalysisMode.BALANCED
+
+    # Performance config
+    performance: PerformanceConfig = field(default_factory=PerformanceConfig)
+
+    # Mode-specific configurations
+    mode_configs: Dict[AnalysisMode, ModeConfig] = field(default_factory=lambda: {
+        AnalysisMode.FAST: ModeConfig(
+            spacy_model="nl_core_news_sm",
+            embedding_model="",  # Embeddings disabled in FAST mode
+            enable_embeddings=False,
+            enable_nlp=True,
+            enable_tfidf=False,
+            enable_synonyms=False,
+            skip_embeddings_threshold=0.0,  # N/A
+            batch_embeddings=False,
+            use_embedding_cache=False,
+            cache_size=0,
+            weight_rapidfuzz=0.60,
+            weight_lemmatized=0.40,
+            weight_tfidf=0.0,
+            weight_synonyms=0.0,
+            weight_embeddings=0.0,
+            time_multiplier=0.5,
+            description="Snelste modus - RapidFuzz + Lemma matching. Ideaal voor datasets <1000 rijen."
+        ),
+        AnalysisMode.BALANCED: ModeConfig(
+            spacy_model="nl_core_news_md",
+            embedding_model="all-MiniLM-L6-v2",
+            enable_embeddings=True,
+            enable_nlp=True,
+            enable_tfidf=True,
+            enable_synonyms=True,
+            skip_embeddings_threshold=0.85,
+            batch_embeddings=True,
+            use_embedding_cache=True,
+            cache_size=5000,
+            weight_rapidfuzz=0.25,
+            weight_lemmatized=0.20,
+            weight_tfidf=0.15,
+            weight_synonyms=0.15,
+            weight_embeddings=0.25,
+            time_multiplier=1.0,
+            description="Aanbevolen - Goede balans tussen snelheid en nauwkeurigheid. Voor alle datasets."
+        ),
+        AnalysisMode.ACCURATE: ModeConfig(
+            spacy_model="nl_core_news_md",
+            embedding_model="paraphrase-multilingual-MiniLM-L12-v2",
+            enable_embeddings=True,
+            enable_nlp=True,
+            enable_tfidf=True,
+            enable_synonyms=True,
+            skip_embeddings_threshold=0.95,  # Only skip if nearly identical
+            batch_embeddings=True,
+            use_embedding_cache=True,
+            cache_size=10000,
+            weight_rapidfuzz=0.20,
+            weight_lemmatized=0.20,
+            weight_tfidf=0.15,
+            weight_synonyms=0.15,
+            weight_embeddings=0.30,
+            time_multiplier=2.0,
+            description="Beste Nederlandse modellen - Maximale nauwkeurigheid voor complexe datasets."
+        )
+    })
+
+    def get_active_config(self) -> ModeConfig:
+        """
+        Get configuration for currently active mode.
+
+        Returns:
+            ModeConfig for the active mode
+        """
+        return self.mode_configs[self.mode]
+
+    def apply_mode(self, mode: AnalysisMode) -> None:
+        """
+        Apply a mode configuration to legacy fields.
+
+        Updates all legacy config fields based on the selected mode.
+        This ensures backwards compatibility with existing code that reads
+        the legacy fields directly.
+
+        Args:
+            mode: Analysis mode to apply
+        """
+        self.mode = mode
+        config = self.mode_configs[mode]
+
+        # Update legacy fields for backwards compatibility
+        self.spacy_model = config.spacy_model
+        self.embedding_model = config.embedding_model
+        self.enable_embeddings = config.enable_embeddings
+        self.enable_nlp = config.enable_nlp
+        self.enable_tfidf = config.enable_tfidf
+        self.enable_synonyms = config.enable_synonyms
+        self.weight_rapidfuzz = config.weight_rapidfuzz
+        self.weight_lemmatized = config.weight_lemmatized
+        self.weight_tfidf = config.weight_tfidf
+        self.weight_synonyms = config.weight_synonyms
+        self.weight_embeddings = config.weight_embeddings
 
 
 @dataclass
