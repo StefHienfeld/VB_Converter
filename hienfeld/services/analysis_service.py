@@ -65,10 +65,11 @@ class AnalysisService:
     └─────────────────────────────────────────────────────────────┘
     """
     
-    # Thresholds for matching - LOWERED for better detection
-    EXACT_MATCH_THRESHOLD = 0.90      # Almost identical -> REPLACE/DELETE (was 0.95)
-    HIGH_SIMILARITY_THRESHOLD = 0.80   # Very similar -> REVIEW (was 0.85)
-    MEDIUM_SIMILARITY_THRESHOLD = 0.70 # Similar -> POSSIBLE MATCH (was 0.75)
+    # Thresholds for matching - RESTORED to proven values
+    # Note: Lowering these caused worse results (more false negatives)
+    EXACT_MATCH_THRESHOLD = 0.95      # Almost identical -> REPLACE/DELETE
+    HIGH_SIMILARITY_THRESHOLD = 0.85   # Very similar -> REVIEW
+    MEDIUM_SIMILARITY_THRESHOLD = 0.75 # Similar -> POSSIBLE MATCH
     
     # Semantic similarity thresholds
     SEMANTIC_MATCH_THRESHOLD = 0.70   # Threshold for semantic similarity (embeddings)

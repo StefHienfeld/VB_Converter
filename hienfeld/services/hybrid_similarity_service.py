@@ -155,6 +155,12 @@ class HybridSimilarityService:
         if self._semantic and self._semantic.is_available:
             available.append("Embeddings")
         
+        if len(available) == 1 and "RapidFuzz" in available:
+            logger.warning(
+                "⚠️ Only RapidFuzz available - semantic enhancements disabled. "
+                "Install dependencies for better matching: pip install spacy gensim"
+            )
+        
         logger.info(f"Hybrid similarity services available: {', '.join(available)}")
     
     def train_tfidf(self, documents: List[str]) -> None:
@@ -189,6 +195,9 @@ class HybridSimilarityService:
     def similarity_detailed(self, text_a: str, text_b: str) -> SimilarityBreakdown:
         """
         Compute hybrid similarity with detailed breakdown.
+        
+        CRITICAL FIX: Dynamic weight redistribution to prevent score dilution
+        when semantic services are unavailable.
         
         Args:
             text_a: First text
@@ -263,12 +272,20 @@ class HybridSimilarityService:
                 weights['embeddings'] = self._semantic_config.weight_embeddings
                 breakdown.methods_used.append('embeddings(inferred)')
         
-        # Calculate weighted average
+        # Calculate weighted average with DYNAMIC WEIGHT REDISTRIBUTION
+        # CRITICAL FIX: If only RapidFuzz is available, use its score directly
+        # This prevents score dilution when semantic services are unavailable
         if weights:
             total_weight = sum(weights.values())
             if total_weight > 0:
                 weighted_sum = sum(scores[k] * weights[k] for k in scores)
                 breakdown.final_score = weighted_sum / total_weight
+            
+            # FALLBACK: If only one method is available (usually RapidFuzz),
+            # use that score directly to maintain backward compatibility
+            if len(scores) == 1 and 'rapidfuzz' in scores:
+                breakdown.final_score = breakdown.rapidfuzz
+                logger.debug("Using RapidFuzz score directly (no semantic services available)")
         
         # Record timing
         elapsed_ms = (time.time() - start_time) * 1000

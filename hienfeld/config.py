@@ -253,8 +253,11 @@ class SemanticConfig:
     enabled: bool = True
     
     # Sentence embeddings (sentence-transformers)
+    # Enabled; skips gracefully if model not cached locally (avoids 5-10min first download).
+    # Pre-download once with: python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')"
+    # Or use a smaller/faster model like "all-MiniLM-L6-v2" (90MB, English-optimized but works for Dutch too)
     enable_embeddings: bool = True
-    embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"  # Good for Dutch
+    embedding_model: str = "all-MiniLM-L6-v2"  # Fast & small (90MB); or "paraphrase-multilingual-MiniLM-L12-v2" for better Dutch (470MB)
     
     # SpaCy NLP (lemmatization, NER)
     enable_nlp: bool = True

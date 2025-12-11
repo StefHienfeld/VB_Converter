@@ -45,22 +45,39 @@ export interface AnalysisResultsResponse {
 
 function buildFormData(req: StartAnalysisRequest): FormData {
   const form = new FormData();
+  
+  // Validate and append policy file
+  if (!req.policyFile) {
+    throw new Error("Polisbestand ontbreekt");
+  }
+  console.log("[FormData] Adding policy file:", req.policyFile.name, req.policyFile.size, "bytes");
   form.append("policy_file", req.policyFile);
-  (req.conditionsFiles || []).forEach((file) => {
+  
+  // Append conditions files
+  const conditionsFiles = req.conditionsFiles || [];
+  console.log("[FormData] Adding", conditionsFiles.length, "conditions files");
+  conditionsFiles.forEach((file, idx) => {
+    console.log(`[FormData]   ${idx + 1}. ${file.name} (${file.size} bytes)`);
     form.append("conditions_files", file);
   });
-  (req.clauseLibraryFiles || []).forEach((file) => {
+  
+  // Append clause library files
+  const clauseLibraryFiles = req.clauseLibraryFiles || [];
+  console.log("[FormData] Adding", clauseLibraryFiles.length, "clause library files");
+  clauseLibraryFiles.forEach((file, idx) => {
+    console.log(`[FormData]   ${idx + 1}. ${file.name} (${file.size} bytes)`);
     form.append("clause_library_files", file);
   });
 
   form.append("cluster_accuracy", String(req.settings.clusterAccuracy));
   form.append("min_frequency", String(req.settings.minFrequency));
   form.append("window_size", String(req.settings.windowSize));
-  form.append("use_conditions", String((req.conditionsFiles?.length ?? 0) > 0));
+  form.append("use_conditions", String(conditionsFiles.length > 0));
   form.append("use_window_limit", String(true));
   form.append("ai_enabled", String(req.settings.aiEnabled));
   form.append("extra_instruction", req.extraInstruction ?? "");
 
+  console.log("[FormData] FormData built successfully");
   return form;
 }
 
@@ -69,17 +86,42 @@ export async function startAnalysis(
 ): Promise<StartAnalysisResponse> {
   const formData = buildFormData(req);
 
-  const res = await fetch(`${API_BASE_URL}/api/analyze`, {
-    method: "POST",
-    body: formData,
+  // Log upload details for debugging
+  console.log("[API] Starting analysis with:", {
+    policyFile: req.policyFile?.name,
+    policyFileSize: req.policyFile?.size,
+    conditionsFilesCount: req.conditionsFiles?.length ?? 0,
+    clauseLibraryFilesCount: req.clauseLibraryFiles?.length ?? 0,
+    apiUrl: `${API_BASE_URL}/api/analyze`
   });
 
-  if (!res.ok) {
-    const detail = await safeParseError(res);
-    throw new Error(detail || "Kon analyse niet starten");
-  }
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/analyze`, {
+      method: "POST",
+      body: formData,
+    });
 
-  return (await res.json()) as StartAnalysisResponse;
+    if (!res.ok) {
+      const detail = await safeParseError(res);
+      console.error("[API] Server error:", res.status, detail);
+      throw new Error(detail || "Kon analyse niet starten");
+    }
+
+    const result = (await res.json()) as StartAnalysisResponse;
+    console.log("[API] Analysis started:", result);
+    return result;
+  } catch (error) {
+    // Enhanced error logging
+    if (error instanceof TypeError && error.message.includes("fetch")) {
+      console.error("[API] Network error - could not reach server:", error);
+      console.error("[API] Check if backend is running at:", API_BASE_URL);
+      throw new Error(
+        `Kan geen verbinding maken met de server (${API_BASE_URL}). ` +
+        "Controleer of de backend draait."
+      );
+    }
+    throw error;
+  }
 }
 
 export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {

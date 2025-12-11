@@ -84,13 +84,35 @@ class SentenceTransformerEmbeddingsService:
         if self._model is None:
             try:
                 from sentence_transformers import SentenceTransformer
+                import os
+                from pathlib import Path
+                
+                # Check if model is already cached locally
+                cache_folder = Path.home() / ".cache" / "huggingface" / "hub"
+                model_exists = False
+                if cache_folder.exists():
+                    # Quick check for model files
+                    for item in cache_folder.glob("*"):
+                        if self.model_name.replace("/", "--") in item.name.lower():
+                            model_exists = True
+                            break
+                
+                if not model_exists:
+                    logger.warning(
+                        f"⚠️ Embedding model '{self.model_name}' not found in cache. "
+                        f"First download takes 5-10 minutes. Skipping embeddings for now. "
+                        f"Pre-download with: python -c \"from sentence_transformers import SentenceTransformer; "
+                        f"SentenceTransformer('{self.model_name}')\""
+                    )
+                    return  # Skip loading, model stays None
+                
                 logger.info(f"Loading embedding model: {self.model_name}")
                 self._model = SentenceTransformer(self.model_name)
                 self._embedding_dim = self._model.get_sentence_embedding_dimension()
                 logger.info(f"Model loaded, embedding dim: {self._embedding_dim}")
             except ImportError:
-                raise ImportError(
-                    "sentence-transformers is required for embeddings. "
+                logger.warning(
+                    "sentence-transformers not installed. "
                     "Install with: pip install sentence-transformers"
                 )
     

@@ -52,6 +52,7 @@ const Index = () => {
   const [results, setResults] = useState<AnalysisResultRow[]>([]);
   const [stats, setStats] = useState<JobStatusResponse["stats"] | null>(null);
   const [inputView, setInputView] = useState<"full" | "compact">("full");
+  const [pollingStartTime, setPollingStartTime] = useState<number | null>(null);
 
   const handlePolicyUpload = useCallback(
     (files: File[]) => {
@@ -136,6 +137,19 @@ const Index = () => {
   const pollStatus = useCallback(
     async (currentJobId: string) => {
       try {
+        // Check for timeout (10 minutes = 600000ms)
+        const MAX_POLLING_TIME = 600000; // 10 minutes
+        if (pollingStartTime && Date.now() - pollingStartTime > MAX_POLLING_TIME) {
+          setIsAnalyzing(false);
+          setPollingStartTime(null);
+          toast({
+            title: "Analyse time-out",
+            description: "De analyse duurt te lang. Mogelijk is de server bezig met het downloaden van ML modellen. Probeer het later opnieuw.",
+            variant: "destructive",
+          });
+          return;
+        }
+
         const status = await getJobStatus(currentJobId);
         updateProgressFromBackend(status);
         setStats(status.stats ?? null);
@@ -145,6 +159,7 @@ const Index = () => {
           setResults(res.results);
           setAnalysisComplete(true);
           setIsAnalyzing(false);
+          setPollingStartTime(null);
           setProgressSteps((prev) =>
             prev.map((step) => ({ ...step, status: "completed" })),
           );
@@ -154,6 +169,7 @@ const Index = () => {
           });
         } else if (status.status === "failed") {
           setIsAnalyzing(false);
+          setPollingStartTime(null);
           toast({
             title: "Analyse mislukt",
             description: status.error || "Er is een fout opgetreden tijdens de analyse.",
@@ -164,6 +180,7 @@ const Index = () => {
         }
       } catch (error: any) {
         setIsAnalyzing(false);
+        setPollingStartTime(null);
         toast({
           title: "Fout bij ophalen status",
           description: error?.message || "Kon de status niet ophalen.",
@@ -171,12 +188,23 @@ const Index = () => {
         });
       }
     },
-    [toast, updateProgressFromBackend],
+    [toast, updateProgressFromBackend, pollingStartTime],
   );
 
   const handleNewAnalysis = useCallback(() => {
     setInputView("full");
+    setPollingStartTime(null);
   }, []);
+
+  const handleCancelAnalysis = useCallback(() => {
+    setIsAnalyzing(false);
+    setPollingStartTime(null);
+    setInputView("full");
+    toast({
+      title: "Analyse geannuleerd",
+      description: "De analyse is gestopt. U kunt een nieuwe analyse starten.",
+    });
+  }, [toast]);
 
   const handleStartAnalysis = useCallback(async () => {
     if (!policyFile) {
@@ -193,6 +221,7 @@ const Index = () => {
       setAnalysisComplete(false);
       setResults([]);
       resetProgress();
+      setPollingStartTime(Date.now()); // Start timeout timer
 
       setInputView("compact");
 
@@ -208,6 +237,7 @@ const Index = () => {
       pollStatus(res.job_id);
     } catch (error: any) {
       setIsAnalyzing(false);
+      setPollingStartTime(null);
       toast({
         title: "Analyse starten mislukt",
         description: error?.message || "Er is een fout opgetreden bij het starten.",
@@ -321,27 +351,42 @@ const Index = () => {
           </div>
 
           <div className="flex flex-col items-center gap-4 mb-8 relative z-10">
-            <Button
-              onClick={inputView === "compact" ? handleNewAnalysis : handleStartAnalysis}
-              disabled={!canStartAnalysis && inputView !== "compact"}
-              className={cn(
-                "btn-primary-cta w-full md:w-auto md:min-w-[200px] h-14 text-sm rounded-xl",
-                "animate-fade-up animation-delay-300"
-              )}
-            >
-              {isAnalyzing ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
-                inputView === "compact" ? (
-                  "Nieuwe Analyse"
+            <div className="flex flex-row items-center gap-3">
+              <Button
+                onClick={inputView === "compact" ? handleNewAnalysis : handleStartAnalysis}
+                disabled={!canStartAnalysis && inputView !== "compact"}
+                className={cn(
+                  "btn-primary-cta w-full md:w-auto md:min-w-[200px] h-14 text-sm rounded-xl",
+                  "animate-fade-up animation-delay-300"
+                )}
+              >
+                {isAnalyzing ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
                 ) : (
-                  <>
-                    <Play className="w-5 h-5 mr-2" />
-                    Start Analyse
-                  </>
-                )
+                  inputView === "compact" ? (
+                    "Nieuwe Analyse"
+                  ) : (
+                    <>
+                      <Play className="w-5 h-5 mr-2" />
+                      Start Analyse
+                    </>
+                  )
+                )}
+              </Button>
+              
+              {isAnalyzing && (
+                <Button
+                  onClick={handleCancelAnalysis}
+                  variant="outline"
+                  className={cn(
+                    "w-full md:w-auto md:min-w-[120px] h-14 text-sm rounded-xl border-destructive/30 text-destructive hover:bg-destructive/10",
+                    "animate-fade-up animation-delay-300"
+                  )}
+                >
+                  Annuleer
+                </Button>
               )}
-            </Button>
+            </div>
 
             {analysisComplete && jobId && (
               <Button

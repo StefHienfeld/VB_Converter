@@ -1,7 +1,5 @@
 # Hoe Werkt de VB Converter Achter de Schermen? 🔍
 
-*Voor de demo: Leg uit WAT alle systemen doen in normale taal*
-
 ---
 
 ## 📋 Overzicht: Wat gebeurt er van begin tot eind?

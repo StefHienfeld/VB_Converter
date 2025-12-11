@@ -40,7 +40,12 @@ from hienfeld.services.ingestion_service import IngestionService
 from hienfeld.services.multi_clause_service import MultiClauseDetectionService
 from hienfeld.services.policy_parser_service import PolicyParserService
 from hienfeld.services.preprocessing_service import PreprocessingService
-from hienfeld.services.similarity_service import RapidFuzzSimilarityService
+from hienfeld.services.similarity_service import RapidFuzzSimilarityService, SemanticSimilarityService
+from hienfeld.services.document_similarity_service import DocumentSimilarityService
+from hienfeld.services.ai.embeddings_service import create_embeddings_service
+from hienfeld.services.ai.vector_store import create_vector_store
+from hienfeld.services.ai.rag_service import RAGService
+from hienfeld.services.ai.llm_analysis_service import LLMAnalysisService
 
 # ---------------------------------------------------------------------------
 # Logging & app setup
@@ -69,6 +74,10 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://localhost:8080",
         "http://127.0.0.1:8080",
+        "http://localhost:8081",
+        "http://127.0.0.1:8081",
+        "http://localhost:8082",
+        "http://127.0.0.1:8082",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -206,6 +215,7 @@ def _run_analysis_job(
         win_size = int(settings.get("window_size", 100))
         use_window_limit = bool(settings.get("use_window_limit", True))
         use_conditions = bool(settings.get("use_conditions", True))
+        use_semantic = bool(settings.get("use_semantic", True))
 
         config.clustering.similarity_threshold = strictness_float
         config.analysis_rules.frequency_standardize_threshold = min_freq
@@ -220,21 +230,14 @@ def _run_analysis_job(
         admin_check = AdminCheckService(config=config, llm_client=None, enable_ai_checks=False)
         export = ExportService(config)
         clause_library_service = ClauseLibraryService(config)
+        tfidf_service = DocumentSimilarityService(config)
+        semantic_service: Optional[SemanticSimilarityService] = None
+        embeddings_service = None
+        vector_store = None
+        rag_service = None
+        ai_analyzer = None
         
-        # Initialize hybrid similarity service (v3.0 semantic enhancement)
         hybrid_service = None
-        if HYBRID_AVAILABLE and config.semantic.enabled:
-            try:
-                hybrid_service = HybridSimilarityService(config)
-                logger.info("Hybrid similarity service initialized (semantic enhancement enabled)")
-            except Exception as e:
-                logger.warning(f"Could not initialize hybrid similarity: {e}")
-        
-        analysis = AnalysisService(
-            config, 
-            admin_check_service=admin_check,
-            hybrid_similarity_service=hybrid_service
-        )
 
         # Step 1: Load policy file
         _update_job(job, progress=5, message="📄 Bestand inlezen...")
@@ -254,6 +257,121 @@ def _run_analysis_job(
                     logger.warning("Failed to parse %s: %s", filename, exc)
         else:
             _update_job(job, progress=10, message="📊 Modus: Interne analyse")
+
+        # Initialize semantic stack (embeddings, RAG, TF-IDF) if requested and possible
+        semantic_stack_active = False
+        if use_conditions and policy_sections and use_semantic and config.semantic.enabled:
+            # Train TF-IDF on voorwaarden (if available)
+            if tfidf_service.is_available:
+                tfidf_corpus = [s.simplified_text for s in policy_sections if s.simplified_text]
+                if tfidf_corpus:
+                    tfidf_service.train_on_corpus(tfidf_corpus)
+            else:
+                logger.debug("TF-IDF service not available; skipping training")
+
+            # Embeddings + vector store + RAG
+            if config.semantic.enable_embeddings:
+                try:
+                    embeddings_service = create_embeddings_service(
+                        model_name=config.semantic.embedding_model
+                    )
+                    vector_store = create_vector_store(
+                        method=config.ai.vector_store_type or "faiss",
+                        embedding_dim=getattr(embeddings_service, "embedding_dim", 384),
+                    )
+                    rag_service = RAGService(embeddings_service, vector_store)
+                    rag_service.index_policy_sections(policy_sections)
+                    logger.info("✅ RAG index opgebouwd voor semantische context")
+                except ImportError as exc:
+                    logger.warning(
+                        "Embeddings/RAG niet geactiveerd: ontbrekende dependency (%s)", exc
+                    )
+                    embeddings_service = None
+                    vector_store = None
+                    rag_service = None
+                except Exception as exc:
+                    logger.warning("RAG initialisatie mislukt: %s", exc)
+                    embeddings_service = None
+                    vector_store = None
+                    rag_service = None
+
+            # Semantic similarity service (embedding-based)
+            if embeddings_service is not None:
+                semantic_service = SemanticSimilarityService(
+                    embeddings_service=embeddings_service,
+                    model_name=config.semantic.embedding_model,
+                )
+                if not semantic_service.is_available:
+                    semantic_service = None
+
+            # LLM analyzer (optional verification); only wire if a client is provided/enabled
+            ai_enabled = bool(settings.get("ai_enabled")) and bool(config.ai.enabled)
+            if ai_enabled:
+                try:
+                    ai_analyzer = LLMAnalysisService(
+                        client=None,  # Plug real LLM client when API key/model configured
+                        rag_service=rag_service,
+                        model_name=config.ai.llm_model or "gpt-4",
+                    )
+                except Exception as exc:
+                    logger.warning("LLM analyzer niet geactiveerd: %s", exc)
+                    ai_analyzer = None
+
+            semantic_stack_active = bool(semantic_service or rag_service or tfidf_service.is_trained)
+        else:
+            if not use_semantic:
+                logger.info("Semantische analyse uitgeschakeld via verzoek")
+            elif not policy_sections:
+                logger.info("Geen voorwaarden geladen: semantische stap wordt overgeslagen")
+
+        # Initialize hybrid similarity service (v3.0 semantic enhancement)
+        if HYBRID_AVAILABLE and config.semantic.enabled and use_semantic:
+            try:
+                hybrid_service = HybridSimilarityService(
+                    config,
+                    tfidf_service=tfidf_service,
+                    semantic_service=semantic_service,
+                )
+
+                # Check which semantic services are actually available
+                stats = hybrid_service.get_statistics()
+                services_available = stats.get('services_available', {})
+
+                semantic_count = sum([
+                    services_available.get('nlp', False),
+                    services_available.get('synonyms', False),
+                    services_available.get('tfidf', False),
+                    services_available.get('embeddings', False)
+                ])
+
+                if semantic_count == 0:
+                    logger.warning(
+                        "⚠️ Hybrid similarity uitgeschakeld: geen semantische services beschikbaar. "
+                        "Gebruik RapidFuzz-only. Installeer spacy/gensim/wn/sentence-transformers voor betere matches."
+                    )
+                    hybrid_service = None
+                else:
+                    active_methods = ", ".join(
+                        k for k, v in services_available.items() if v and k != "rapidfuzz"
+                    )
+                    logger.info(
+                        f"✅ Hybrid similarity actief met {semantic_count} semantische services: {active_methods}"
+                    )
+            except Exception as e:
+                logger.warning(f"Could not initialize hybrid similarity: {e}")
+                hybrid_service = None
+        else:
+            hybrid_service = None
+
+        analysis = AnalysisService(
+            config,
+            ai_analyzer=ai_analyzer,
+            similarity_service=similarity_service,
+            semantic_similarity_service=semantic_service,
+            hybrid_similarity_service=hybrid_service,
+            clause_library_service=None,
+            admin_check_service=admin_check,
+        )
 
         # Step 3: Load clause library if available
         if clause_library_files:
@@ -402,6 +520,14 @@ def _run_analysis_job(
         stats["analysis_mode"] = (
             "with_conditions" if (use_conditions and policy_sections) else "internal_only"
         )
+        stats["semantic_status"] = {
+            "requested": use_semantic,
+            "conditions_loaded": bool(policy_sections),
+            "semantic_index_ready": getattr(analysis, "_semantic_index_ready", False),
+            "hybrid_enabled": bool(hybrid_service),
+            "tfidf_trained": tfidf_service.is_trained if tfidf_service else False,
+            "rag_indexed": rag_service.is_ready() if rag_service else False,
+        }
 
         # Step 9: Build results rows for API
         result_rows: List[Dict[str, Any]] = []
@@ -504,13 +630,14 @@ async def upload_preview(policy_file: UploadFile = File(...)) -> UploadPreviewRe
 async def start_analysis(
     background_tasks: BackgroundTasks,
     policy_file: UploadFile = File(...),
-    conditions_files: List[UploadFile] = File(default_factory=list),
-    clause_library_files: List[UploadFile] = File(default_factory=list),
+    conditions_files: List[UploadFile] = File(default=[]),
+    clause_library_files: List[UploadFile] = File(default=[]),
     cluster_accuracy: int = Form(90),
     min_frequency: int = Form(20),
     window_size: int = Form(100),
     use_conditions: bool = Form(True),
     use_window_limit: bool = Form(True),
+    use_semantic: bool = Form(True),
     ai_enabled: bool = Form(False),  # reserved for future AI extensions
     extra_instruction: str = Form(""),
 ) -> StartAnalysisResponse:
@@ -548,6 +675,7 @@ async def start_analysis(
         "window_size": window_size,
         "use_conditions": use_conditions,
         "use_window_limit": use_window_limit,
+        "use_semantic": use_semantic,
         "ai_enabled": ai_enabled,
         "extra_instruction": extra_instruction,
     }
