@@ -618,6 +618,8 @@ def _run_analysis_job(
                 "reason": advice.reason if advice else "",
                 "reference_article": advice.reference_article if advice else "",
                 "original_text": text_content,
+                "row_type": "SINGLE",  # Simple clustering (no PARENT/CHILD splitting)
+                "parent_id": None,
             }
             result_rows.append(row)
 
