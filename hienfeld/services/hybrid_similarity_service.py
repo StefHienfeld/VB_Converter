@@ -210,8 +210,14 @@ class HybridSimilarityService:
         # 1. RapidFuzz (always computed, very fast)
         rapidfuzz_score = self._rapidfuzz.similarity(text_a, text_b)
 
-        # Early exit if RapidFuzz score is high enough
+        # OPTIMIZATION: Early exit on very low scores (clearly not similar)
+        if rapidfuzz_score < 0.50:
+            logger.debug(f"Early exit: RapidFuzz too low ({rapidfuzz_score:.2f})")
+            return rapidfuzz_score * mode_config.weight_rapidfuzz
+
+        # OPTIMIZATION: Early exit if RapidFuzz score is high enough (clearly similar)
         if rapidfuzz_score >= mode_config.skip_embeddings_threshold:
+            logger.debug(f"Early exit: RapidFuzz high enough ({rapidfuzz_score:.2f})")
             return rapidfuzz_score
 
         # Collect scores and weights for enabled methods
@@ -227,6 +233,25 @@ class HybridSimilarityService:
                 weights['lemmatized'] = mode_config.weight_lemmatized
             except Exception:
                 pass
+
+        # OPTIMIZATION: Cascading confidence check after cheap methods
+        # If we have RapidFuzz + Lemma and score is already very high, skip expensive methods
+        if 'lemmatized' in scores and 'rapidfuzz' in scores:
+            current_weights = sum(weights.values())
+            current_score = sum(scores[k] * weights[k] for k in scores) / current_weights
+
+            # If already scoring very high (>0.90) with cheap methods, skip embeddings
+            if current_score >= 0.90:
+                logger.debug(f"Cascading exit: score already high ({current_score:.2f})")
+                return current_score
+
+            # If score is very low even with both methods, can't possibly reach threshold
+            remaining_weight = 1.0 - current_weights
+            max_possible = current_score * current_weights + remaining_weight  # Max if rest = 1.0
+
+            if max_possible < 0.70:  # Can't reach useful threshold
+                logger.debug(f"Cascading exit: max possible too low ({max_possible:.2f})")
+                return current_score
 
         # 3. TF-IDF (if enabled and trained)
         if mode_config.enable_tfidf and self._tfidf and self._tfidf.is_trained:

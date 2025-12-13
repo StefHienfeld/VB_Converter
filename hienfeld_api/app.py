@@ -30,14 +30,15 @@ from pydantic import BaseModel
 
 from hienfeld.config import load_config
 from hienfeld.domain.policy_document import PolicyDocumentSection
-from hienfeld.logging_config import get_logger, setup_logging
+from hienfeld.logging_config import get_logger, setup_logging, log_section
+from hienfeld.utils.timing import PhaseTimer, Timer
+from hienfeld.services.service_cache import get_service_cache
 from hienfeld.services.admin_check_service import AdminCheckService
 from hienfeld.services.analysis_service import AnalysisService
 from hienfeld.services.clause_library_service import ClauseLibraryService
 from hienfeld.services.clustering_service import ClusteringService
 from hienfeld.services.export_service import ExportService
 from hienfeld.services.ingestion_service import IngestionService
-from hienfeld.services.multi_clause_service import MultiClauseDetectionService
 from hienfeld.services.policy_parser_service import PolicyParserService
 from hienfeld.services.preprocessing_service import PreprocessingService
 from hienfeld.services.similarity_service import RapidFuzzSimilarityService, SemanticSimilarityService
@@ -46,6 +47,7 @@ from hienfeld.services.ai.embeddings_service import create_embeddings_service
 from hienfeld.services.ai.vector_store import create_vector_store
 from hienfeld.services.ai.rag_service import RAGService
 from hienfeld.services.ai.llm_analysis_service import LLMAnalysisService
+from hienfeld.services.custom_instructions_service import CustomInstructionsService
 
 # ---------------------------------------------------------------------------
 # Logging & app setup
@@ -204,8 +206,13 @@ def _run_analysis_job(
         logger.error(f"Job {job_id} not found when starting analysis")
         return
 
+    # Initialize phase timer for tracking entire pipeline
+    phase_timer = PhaseTimer(f"Analysis Job {job_id[:8]}")
+
     try:
         _update_job(job, status=JobStatus.RUNNING, progress=0, message="Initialiseren...")
+
+        log_section(logger, f"🚀 NEW ANALYSIS JOB: {job_id}")
 
         # Load base config and apply settings from the request
         config = load_config()
@@ -216,11 +223,17 @@ def _run_analysis_job(
         try:
             mode = AnalysisMode(analysis_mode_str)
             config.semantic.apply_mode(mode)
-            logger.info(f"Analysis mode: {mode.value} (time_multiplier: {config.semantic.get_active_config().time_multiplier}x)")
+            logger.info(f"📊 Analysis mode: {mode.value.upper()}")
+            logger.info(f"   • Time multiplier: {config.semantic.get_active_config().time_multiplier}x")
+            logger.info(f"   • Cluster threshold: {settings.get('cluster_accuracy', 90)}%")
+            logger.info(f"   • Min frequency: {settings.get('min_frequency', 20)}")
+            logger.info(f"   • Window size: {settings.get('window_size', 100)}")
         except ValueError:
             logger.warning(f"Invalid analysis mode '{analysis_mode_str}', defaulting to BALANCED")
             mode = AnalysisMode.BALANCED
             config.semantic.apply_mode(mode)
+
+        phase_timer.checkpoint("Configuration loaded")
 
         strictness_float = float(settings.get("cluster_accuracy", 90)) / 100.0
         min_freq = int(settings.get("min_frequency", 20))
@@ -228,6 +241,7 @@ def _run_analysis_job(
         use_window_limit = bool(settings.get("use_window_limit", True))
         use_conditions = bool(settings.get("use_conditions", True))
         use_semantic = bool(settings.get("use_semantic", True))
+        extra_instruction = str(settings.get("extra_instruction", "")).strip()
 
         config.clustering.similarity_threshold = strictness_float
         config.analysis_rules.frequency_standardize_threshold = min_freq
@@ -238,10 +252,35 @@ def _run_analysis_job(
         ingestion = IngestionService(config)
         preprocessing = PreprocessingService(config)
         policy_parser = PolicyParserService(config)
-        multi_clause = MultiClauseDetectionService(config)
-        
+
+        # Initialize NLP service for semantic cluster naming (cached)
+        nlp_service_for_naming = None
+        if config.semantic.enabled and config.semantic.enable_nlp:
+            try:
+                from hienfeld.services.nlp_service import NLPService
+                cache = get_service_cache()
+
+                # Get or create cached NLP service
+                nlp_service_for_naming = cache.get_or_create(
+                    'nlp_service_nl_core_news_md',
+                    lambda: NLPService(config),
+                    ttl=None  # Cache indefinitely (model doesn't change)
+                )
+
+                if nlp_service_for_naming.is_available:
+                    logger.info("✅ NLP service loaded for semantic cluster naming (cached)")
+                else:
+                    nlp_service_for_naming = None
+            except Exception as e:
+                logger.debug(f"NLP service not available for cluster naming: {e}")
+                nlp_service_for_naming = None
+
         # Create clustering service - will use hybrid service later if available
-        clustering = ClusteringService(config, similarity_service=base_similarity_service)
+        clustering = ClusteringService(
+            config,
+            similarity_service=base_similarity_service,
+            nlp_service=nlp_service_for_naming
+        )
         admin_check = AdminCheckService(config=config, llm_client=None, enable_ai_checks=False)
         export = ExportService(config)
         clause_library_service = ClauseLibraryService(config)
@@ -256,47 +295,84 @@ def _run_analysis_job(
 
         # Step 1: Load policy file
         _update_job(job, progress=5, message="📄 Bestand inlezen...")
-        df = ingestion.load_policy_file(policy_bytes, policy_filename)
-        text_col = ingestion.detect_text_column(df)
-        policy_number_col = ingestion.detect_policy_number_column(df)
+        logger.info(f"📄 Loading policy file: {policy_filename} ({len(policy_bytes)} bytes)")
+
+        with Timer("Load policy file"):
+            df = ingestion.load_policy_file(policy_bytes, policy_filename)
+            text_col = ingestion.detect_text_column(df)
+            policy_number_col = ingestion.detect_policy_number_column(df)
+
+        logger.info(f"✅ Policy loaded: {len(df)} rows, text column: '{text_col}'")
+        phase_timer.checkpoint(f"Policy file loaded ({len(df)} rows)")
 
         # Step 2: Parse conditions (if enabled)
         policy_sections: List[PolicyDocumentSection] = []
         if use_conditions and conditions_files:
             _update_job(job, progress=10, message="📚 Voorwaarden verwerken...")
-            for file_bytes, filename in conditions_files:
-                try:
-                    sections = policy_parser.parse_policy_file(file_bytes, filename)
-                    policy_sections.extend(sections)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Failed to parse %s: %s", filename, exc)
+            logger.info(f"📚 Parsing {len(conditions_files)} conditions files...")
+
+            with Timer(f"Parse {len(conditions_files)} conditions files"):
+                for file_bytes, filename in conditions_files:
+                    try:
+                        logger.debug(f"   • Parsing {filename} ({len(file_bytes)} bytes)...")
+                        sections = policy_parser.parse_policy_file(file_bytes, filename)
+                        policy_sections.extend(sections)
+                        logger.debug(f"     → {len(sections)} sections extracted")
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(f"Failed to parse {filename}: {exc}")
+
+            logger.info(f"✅ Conditions parsed: {len(policy_sections)} total sections")
+            phase_timer.checkpoint(f"Conditions parsed ({len(policy_sections)} sections)")
         else:
             _update_job(job, progress=10, message="📊 Modus: Interne analyse")
+            logger.info("ℹ️  No conditions files - internal analysis mode")
+            phase_timer.checkpoint("No conditions (internal mode)")
 
         # Initialize semantic stack (embeddings, RAG, TF-IDF) if requested and possible
         semantic_stack_active = False
-        
+
+        log_section(logger, "🧠 SEMANTIC SERVICES INITIALIZATION")
+
         # Initialize semantic services for clustering (independent of conditions)
         if use_semantic and config.semantic.enabled:
             # Train TF-IDF on voorwaarden (if available and we have conditions)
             if policy_sections and tfidf_service.is_available and config.semantic.enable_tfidf:
-                tfidf_corpus = [s.simplified_text for s in policy_sections if s.simplified_text]
-                if tfidf_corpus:
-                    tfidf_service.train_on_corpus(tfidf_corpus)
-                    logger.info(f"✅ TF-IDF trained on {len(tfidf_corpus)} policy sections")
-                else:
-                    logger.warning("⚠️ No text in policy sections for TF-IDF training")
-            
-            # Embeddings + vector store (for clustering similarity)
+                _update_job(job, progress=12, message="🔤 TF-IDF model trainen...")
+                logger.info("🔤 Training TF-IDF model...")
+
+                with Timer("TF-IDF training"):
+                    tfidf_corpus = [s.simplified_text for s in policy_sections if s.simplified_text]
+                    if tfidf_corpus:
+                        tfidf_service.train_on_corpus(tfidf_corpus)
+                        logger.info(f"✅ TF-IDF trained on {len(tfidf_corpus)} documents")
+                    else:
+                        logger.warning("⚠️ No text in policy sections for TF-IDF training")
+
+                phase_timer.checkpoint("TF-IDF training")
+
+            # Embeddings + vector store (for clustering similarity) - cached
             if config.semantic.enable_embeddings:
+                _update_job(job, progress=14, message="🧠 Embeddings laden...")
                 try:
-                    embeddings_service = create_embeddings_service(
-                        model_name=config.semantic.embedding_model
+                    cache = get_service_cache()
+
+                    # Get or create cached embeddings service
+                    embeddings_service = cache.get_or_create(
+                        f'embeddings_{config.semantic.embedding_model}',
+                        lambda: create_embeddings_service(
+                            model_name=config.semantic.embedding_model
+                        ),
+                        ttl=None  # Cache indefinitely (model doesn't change)
                     )
+
+                    logger.info(f"✅ Embeddings service loaded (model: {config.semantic.embedding_model}, cached)")
+
+                    _update_job(job, progress=16, message="📊 Vector store initialiseren...")
                     vector_store = create_vector_store(
                         method=config.ai.vector_store_type or "faiss",
                         embedding_dim=getattr(embeddings_service, "embedding_dim", 384),
                     )
+                    _update_job(job, progress=18, message="🔍 RAG index bouwen...")
                     rag_service = RAGService(embeddings_service, vector_store)
                     rag_service.index_policy_sections(policy_sections)
                     logger.info("✅ RAG index opgebouwd voor semantische context")
@@ -344,6 +420,7 @@ def _run_analysis_job(
 
         # Initialize hybrid similarity service (v3.0 semantic enhancement)
         if HYBRID_AVAILABLE and config.semantic.enabled and use_semantic:
+            _update_job(job, progress=20, message="⚡ Hybrid similarity configureren...")
             try:
                 # Get active mode configuration
                 mode_config = config.semantic.get_active_config()
@@ -405,6 +482,21 @@ def _run_analysis_job(
         else:
             hybrid_service = None
 
+        # Initialize custom instructions service (Step 0.5) if provided
+        custom_instructions_service = None
+        if extra_instruction:
+            custom_instructions_service = CustomInstructionsService(
+                fuzzy_service=base_similarity_service,
+                semantic_service=semantic_service,
+                hybrid_service=hybrid_service,
+            )
+            loaded_count = custom_instructions_service.load_instructions(extra_instruction)
+            if loaded_count > 0:
+                logger.info(f"✅ Custom instructions loaded: {loaded_count} regels")
+            else:
+                logger.warning("⚠️ Custom instructions provided but could not be parsed")
+                custom_instructions_service = None
+
         analysis = AnalysisService(
             config,
             ai_analyzer=ai_analyzer,
@@ -413,15 +505,17 @@ def _run_analysis_job(
             hybrid_similarity_service=hybrid_service,
             clause_library_service=None,
             admin_check_service=admin_check,
+            custom_instructions_service=custom_instructions_service,
         )
 
         # Step 3: Load clause library if available
         if clause_library_files:
+            _update_job(job, progress=21, message="📚 Clausulebibliotheek laden...")
             clause_library_service.load_from_files(clause_library_files)
             analysis.set_clause_library_service(clause_library_service)
 
         # Step 4: Convert to clauses
-        _update_job(job, progress=15, message="📄 Data voorbereiden...")
+        _update_job(job, progress=23, message="📄 Data voorbereiden...")
         clauses = preprocessing.dataframe_to_clauses(
             df,
             text_col,
@@ -429,22 +523,29 @@ def _run_analysis_job(
             source_file_name=policy_filename,
         )
 
-        # Step 5: Multi-clause detection
-        _update_job(job, progress=20, message="🔍 Multi-clausule detectie...")
-        multi_clause.mark_multi_clauses(clauses)
-
-        # Step 6: Clustering
+        # Step 5: Clustering (multi-clause detection removed - now handled by length check)
         _update_job(job, progress=25, message="🔗 Slim clusteren...")
-        clusters, clause_to_cluster = clustering.cluster_clauses(clauses)
+        log_section(logger, f"🔗 CLUSTERING ({len(clauses)} clauses)")
+
+        # Progress callback for clustering (25% -> 50%)
+        def clustering_progress(pct: int) -> None:
+            actual_progress = 25 + int(pct * 0.25)  # Map 0-100 to 25-50
+            _update_job(job, progress=actual_progress, message=f"🔗 Slim clusteren... ({pct}%)")
+
+        with Timer(f"Cluster {len(clauses)} clauses"):
+            clusters, clause_to_cluster = clustering.cluster_clauses(clauses, progress_callback=clustering_progress)
+
+        logger.info(f"✅ Clustering complete: {len(clusters)} clusters from {len(clauses)} clauses")
+        logger.info(f"   • Avg cluster size: {len(clauses) / len(clusters):.1f}")
+        phase_timer.checkpoint(f"Clustering ({len(clusters)} clusters)")
 
         for clause in clauses:
             clause.cluster_id = clause_to_cluster.get(clause.id)
 
         _update_job(job, progress=50, message="🧠 Analyseren...")
 
-        # Step 7: Analysis
+        # Step 7: Analysis (simplified - no splitting)
         sections_to_use = policy_sections if use_conditions else []
-        hierarchical_results: List[Dict[str, Any]] = []
         advice_map: Dict[str, Any] = {}
 
         total_clusters = len(clusters)
@@ -457,20 +558,20 @@ def _run_analysis_job(
                     message=f"🧠 Analyseren... ({idx}/{total_clusters})",
                 )
 
-            parent_advice = analysis.analyze_clusters(
+            advice = analysis.analyze_clusters(
                 [cluster],
                 sections_to_use,
                 progress_callback=None,
             ).get(cluster.id)
 
-            if not parent_advice:
+            if not advice:
                 from hienfeld.domain.analysis import (  # local import to avoid cycles
                     AdviceCode,
                     AnalysisAdvice,
                     ConfidenceLevel,
                 )
 
-                parent_advice = AnalysisAdvice(
+                advice = AnalysisAdvice(
                     cluster_id=cluster.id,
                     advice_code=AdviceCode.HANDMATIG_CHECKEN.value,
                     reason="Geen advies gegenereerd",
@@ -481,80 +582,7 @@ def _run_analysis_job(
                     frequency=cluster.frequency,
                 )
 
-            leader_clause = cluster.leader_clause
-            if multi_clause.is_multi_clause(leader_clause):
-                sub_segments = multi_clause.split_clause(cluster.original_text)
-
-                if len(sub_segments) > 1 and sub_segments[0] != cluster.original_text:
-                    child_rows: List[Dict[str, Any]] = []
-                    advice_summary: Dict[str, int] = {}
-
-                    for seg_idx, segment in enumerate(sub_segments):
-                        child_advice = analysis.analyze_text_segment(
-                            text=segment,
-                            segment_id=f"{cluster.id}.{seg_idx + 1}",
-                            cluster_name=cluster.name,
-                            frequency=1,
-                            policy_sections=sections_to_use,
-                        )
-
-                        code = child_advice.advice_code if child_advice else "ONBEKEND"
-                        advice_summary[code] = advice_summary.get(code, 0) + 1
-
-                        child_rows.append(
-                            {
-                                "type": "CHILD",
-                                "id": f"{cluster.id}.{seg_idx + 1}",
-                                "parent_id": cluster.id,
-                                "text": segment,
-                                "advice": child_advice,
-                                "cluster": None,
-                            },
-                        )
-
-                    summary_parts = [f"{count}x {code}" for code, count in advice_summary.items()]
-                    summary_str = ", ".join(summary_parts)
-
-                    parent_advice.advice_code = "⚠️ GESPLITST"
-                    parent_advice.reason = f"Gesplitst in {len(sub_segments)} onderdelen: {summary_str}"
-
-                    hierarchical_results.append(
-                        {
-                            "type": "PARENT",
-                            "id": cluster.id,
-                            "cluster": cluster,
-                            "advice": parent_advice,
-                            "children": child_rows,
-                        },
-                    )
-                    hierarchical_results.extend(child_rows)
-                else:
-                    if len(cluster.original_text) > 1000:
-                        parent_advice.advice_code = "⚠️ SPLITSEN CONTROLEREN"
-                        parent_advice.reason = (
-                            f"Lange tekst ({len(cluster.original_text)} tekens) - "
-                            f"automatisch splitsen niet mogelijk. {parent_advice.reason}"
-                        )
-
-                    hierarchical_results.append(
-                        {
-                            "type": "SINGLE",
-                            "id": cluster.id,
-                            "cluster": cluster,
-                            "advice": parent_advice,
-                        },
-                    )
-            else:
-                hierarchical_results.append(
-                    {
-                        "type": "SINGLE",
-                        "id": cluster.id,
-                        "cluster": cluster,
-                        "advice": parent_advice,
-                    },
-                )
-
-            advice_map[cluster.id] = parent_advice
+            advice_map[cluster.id] = advice
 
         # Step 8: Statistics
         _update_job(job, progress=95, message="📊 Resultaten samenstellen...")
@@ -571,43 +599,35 @@ def _run_analysis_job(
             "rag_indexed": rag_service.is_ready() if rag_service else False,
         }
 
-        # Step 9: Build results rows for API
+        # Step 9: Build results rows for API (simplified)
         result_rows: List[Dict[str, Any]] = []
-        for result in hierarchical_results:
-            cluster = result.get("cluster")
-            advice = result.get("advice")
-
-            if cluster:
-                text_content = (
-                    cluster.original_text[:500] + "..."
-                    if len(cluster.original_text) > 500
-                    else cluster.original_text
-                )
-            else:
-                text_content = (result.get("text") or "")[:500]
+        for cluster in clusters:
+            advice = advice_map.get(cluster.id)
+            text_content = (
+                cluster.original_text[:500] + "..."
+                if len(cluster.original_text) > 500
+                else cluster.original_text
+            )
 
             row = {
-                "cluster_id": result.get("id", ""),
-                "cluster_name": cluster.name if cluster else "",
-                "frequency": cluster.frequency if cluster else 1,
+                "cluster_id": cluster.id,
+                "cluster_name": cluster.name,
+                "frequency": cluster.frequency,
                 "advice_code": advice.advice_code if advice else "",
                 "confidence": advice.confidence if advice else "",
                 "reason": advice.reason if advice else "",
                 "reference_article": advice.reference_article if advice else "",
                 "original_text": text_content,
-                "row_type": result.get("type", "SINGLE"),
-                "parent_id": result.get("parent_id", ""),
             }
             result_rows.append(row)
 
-        # Step 10: Generate Excel
+        # Step 10: Generate Excel (one row per input row)
         results_df = export.build_results_dataframe(
             clauses,
             clusters,
             advice_map,
             include_original_columns=True,
             original_df=df,
-            hierarchical_results=hierarchical_results,
         )
         excel_bytes = export.to_excel_bytes(
             results_df,
@@ -627,7 +647,15 @@ def _run_analysis_job(
             progress=100,
             message="✅ Analyse voltooid!",
         )
-        logger.info("Analysis job %s completed: %s clusters", job_id, stats.get("unique_clusters", 0))
+
+        # Finish timing and log summary
+        timing_stats = phase_timer.finish()
+        logger.info("=" * 80)
+        logger.info(f"🎉 Analysis job {job_id[:8]} COMPLETED")
+        logger.info(f"   • Total clusters: {stats.get('unique_clusters', 0)}")
+        logger.info(f"   • Input rows: {len(clauses)}")
+        logger.info(f"   • Total time: {timing_stats['total_time']:.1f}s")
+        logger.info("=" * 80)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Analysis job %s failed: %s", job_id, exc)
         _update_job(
@@ -816,5 +844,77 @@ async def download_report(job_id: str) -> StreamingResponse:
 async def healthcheck() -> Dict[str, str]:
     """Simple health endpoint for monitoring."""
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Cache management endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/cache/stats")
+async def get_cache_stats() -> Dict[str, Any]:
+    """
+    Get service cache statistics.
+
+    Returns cache metadata including:
+    - Total cached entries
+    - Access counts per service
+    - Age of cached services
+    - Last access times
+
+    Useful for monitoring cache performance and debugging.
+    """
+    cache = get_service_cache()
+    return cache.get_stats()
+
+
+@app.post("/api/cache/clear")
+async def clear_cache() -> Dict[str, Any]:
+    """
+    Clear entire service cache.
+
+    Forces all services (NLP, embeddings, etc.) to reload on next request.
+    Useful for:
+    - Testing
+    - Forcing model updates
+    - Debugging memory issues
+
+    Returns:
+        Number of cleared entries
+    """
+    cache = get_service_cache()
+    count = cache.clear()
+    logger.info(f"🗑️  Cache cleared via API ({count} entries)")
+    return {
+        "status": "ok",
+        "message": f"Cleared {count} cached services",
+        "cleared_count": count
+    }
+
+
+@app.delete("/api/cache/{key}")
+async def invalidate_cache_entry(key: str) -> Dict[str, Any]:
+    """
+    Invalidate specific cache entry.
+
+    Args:
+        key: Cache key (e.g., 'nlp_service_nl_core_news_md')
+
+    Returns:
+        Success status
+    """
+    cache = get_service_cache()
+    success = cache.invalidate(key)
+    if success:
+        logger.info(f"🗑️  Cache entry '{key}' invalidated via API")
+        return {
+            "status": "ok",
+            "message": f"Invalidated '{key}'"
+        }
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Cache key '{key}' not found"
+        )
 
 
