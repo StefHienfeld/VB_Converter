@@ -65,6 +65,12 @@ class ExportService:
         
         # Create cluster lookup for efficiency
         cluster_lookup = {c.id: c for c in clusters}
+
+        # Identify source columns (all except the text column)
+        source_cols: List[str] = []
+        if include_original_columns and original_df is not None:
+            text_col = self._detect_text_column(original_df)
+            source_cols = [c for c in original_df.columns if c != text_col]
         
         # Build rows
         rows = []
@@ -76,31 +82,177 @@ class ExportService:
             advice = advice_map.get(cluster_id)
             
             row = {
-                'Clause_ID': clause.id,
+                # NEW: Status kolom (leeg) voor collega's tracking
+                'Status': '',
                 'Cluster_ID': cluster_id,
                 'Cluster_Naam': cluster.name if cluster else '',
-                'Frequentie': cluster.frequency if cluster else 0,
-                'Advies': advice.advice_code if advice else '',
                 'Vertrouwen': advice.confidence if advice else '',
+                'Advies': advice.advice_code if advice else '',
                 'Reden': advice.reason if advice else '',
                 'Artikel': advice.reference_article if advice else '',
+                'Frequentie': cluster.frequency if cluster else 0,
                 'Tekst': clause.raw_text,
-                'Is_Multi_Clause': clause.is_multi_clause
             }
             
             # Add policy number if available
             if clause.source_policy_number:
                 row['Polisnummer'] = clause.source_policy_number
+
+            # Add original source columns per policy row (e.g., vervaldatum, product, etc.)
+            if include_original_columns and original_df is not None and source_cols:
+                orig_idx = self._extract_original_index(clause.id)
+                if orig_idx is not None and orig_idx in original_df.index:
+                    original_row = original_df.loc[orig_idx]
+                    for col in source_cols:
+                        try:
+                            row[col] = original_row[col]
+                        except Exception:
+                            row[col] = ""
+                else:
+                    for col in source_cols:
+                        row[col] = ""
             
             rows.append(row)
         
         df = pd.DataFrame(rows)
-        
+
+        # POST-PROCESSING: Group singleton clusters (freq=1) into "Uniek" meta-clusters
+        df = self._group_unique_texts(df)
+
         # Sort by cluster ID for readability
         df = df.sort_values(by='Cluster_ID')
-        
+
         logger.info(f"Created DataFrame with {len(df)} rows, {len(df.columns)} columns")
         return df
+
+    def _extract_original_index(self, clause_id: str) -> Optional[int]:
+        """
+        Extract original DataFrame index from Clause ID.
+
+        Supported formats:
+        - "row_{idx}"
+        - "{policy_number}_{idx}" (policy number may contain underscores; idx is last part)
+        """
+        if not clause_id:
+            return None
+
+        clause_id = str(clause_id)
+        if clause_id.startswith('row_'):
+            try:
+                return int(clause_id.split('_')[1])
+            except (ValueError, IndexError):
+                return None
+
+        if '_' in clause_id:
+            try:
+                parts = clause_id.rsplit('_', 1)
+                if len(parts) == 2:
+                    return int(parts[1])
+            except (ValueError, IndexError):
+                return None
+
+        return None
+
+    def _group_unique_texts(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Group singleton clusters (Frequentie=1) into "Uniek" meta-clusters.
+
+        Strategy:
+        - Clusters with freq >= 2: Keep as-is (real duplicates)
+        - Clusters with freq == 1: Group by Advies + Vertrouwen
+
+        Result:
+        - Normal clusters: CL-0001, CL-0002, etc.
+        - Unique clusters: UNIEK-VERWIJDEREN-Hoog, UNIEK-HANDMATIG CHECKEN-Midden, etc.
+
+        Args:
+            df: DataFrame with analysis results
+
+        Returns:
+            DataFrame with regrouped unique texts
+        """
+        if df.empty or 'Frequentie' not in df.columns:
+            return df
+
+        # Separate real clusters (freq >= 2) from singletons (freq == 1)
+        real_clusters = df[df['Frequentie'] >= 2].copy()
+        singletons = df[df['Frequentie'] == 1].copy()
+
+        if singletons.empty:
+            logger.info("No singleton clusters to regroup")
+            return df
+
+        logger.info(f"Regrouping {len(singletons)} singleton clusters into 'Uniek' meta-clusters")
+
+        # Create unique cluster IDs based on Advies + Vertrouwen
+        def create_unique_cluster_id(row):
+            advies = row.get('Advies', 'ONBEKEND')
+            vertrouwen = row.get('Vertrouwen', 'Onbekend')
+            # Clean up advies for ID (remove emojis, special chars)
+            advies_clean = advies.replace('✓', '').replace('⚠️', '').replace('🔍', '').strip()
+            return f"UNIEK-{advies_clean}-{vertrouwen}"
+
+        def create_unique_cluster_name(row):
+            advies = row.get('Advies', 'Onbekend')
+            vertrouwen = row.get('Vertrouwen', 'Onbekend')
+            return f"Unieke teksten - {advies} ({vertrouwen})"
+
+        # Apply grouping
+        singletons['Cluster_ID'] = singletons.apply(create_unique_cluster_id, axis=1)
+        singletons['Cluster_Naam'] = singletons.apply(create_unique_cluster_name, axis=1)
+
+        # Update Frequentie to reflect group size (per unique cluster)
+        unique_cluster_sizes = singletons['Cluster_ID'].value_counts().to_dict()
+        singletons['Frequentie'] = singletons['Cluster_ID'].map(unique_cluster_sizes)
+
+        # Combine back together
+        result = pd.concat([real_clusters, singletons], ignore_index=True)
+
+        # Log statistics
+        unique_groups = singletons['Cluster_ID'].nunique()
+        logger.info(f"Created {unique_groups} unique meta-clusters from {len(singletons)} singleton texts")
+        logger.info(f"Final: {len(real_clusters)} real clusters + {unique_groups} unique groups = {len(real_clusters) + unique_groups} total cluster groups")
+
+        return result
+
+    def _detect_text_column(self, df: pd.DataFrame) -> Optional[str]:
+        """
+        Best-effort detection of the free-text column in the original DataFrame.
+
+        1) Try common names (Tekst/Vrije Tekst/etc.)
+        2) Fallback: pick the column with the highest median string length in a small sample.
+        """
+        if df is None or df.empty:
+            return None
+
+        # Common names (keep in sync with ingestion/preprocessing expectations)
+        text_cols = ['Tekst', 'Vrije Tekst', 'Clausule', 'Text', 'Description']
+        for col in text_cols:
+            if col in df.columns:
+                return col
+
+        # Case-insensitive match
+        lower_map = {c.lower(): c for c in df.columns}
+        for col in text_cols:
+            if col.lower() in lower_map:
+                return lower_map[col.lower()]
+
+        # Heuristic fallback (sample for performance)
+        sample = df.head(200)
+        best_col = None
+        best_score = -1.0
+        for col in df.columns:
+            try:
+                series = sample[col]
+                # Prefer object-like columns; numeric columns won't win on length anyway
+                med = series.astype(str).str.len().median()
+                if pd.notna(med) and float(med) > best_score:
+                    best_score = float(med)
+                    best_col = col
+            except Exception:
+                continue
+
+        return best_col
     
     def _build_hierarchical_dataframe(
         self,
@@ -321,7 +473,7 @@ class ExportService:
         return df
     
     def to_excel_bytes(
-        self, 
+        self,
         df: pd.DataFrame,
         include_summary: bool = False,
         clusters: Optional[List[Cluster]] = None,
@@ -329,51 +481,45 @@ class ExportService:
     ) -> bytes:
         """
         Export DataFrame to Excel bytes.
-        
+
         Args:
             df: Main results DataFrame
             include_summary: Whether to include a summary sheet
             clusters: Clusters for summary (required if include_summary=True)
             advice_map: Advice map for summary (required if include_summary=True)
-            
+
         Returns:
             Excel file as bytes
         """
         output = BytesIO()
-        
+
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Check if DataFrame has 'Type' column (hierarchical results)
-            has_type_column = 'Type' in df.columns
-            
-            if has_type_column:
-                # V2.2 DUAL-SHEET ARCHITECTURE
-                # Sheet 1: Analyseresultaten (Clean flow)
-                # - SINGLE types without SPLITSEN in Advies
-                clean_mask = (df['Type'] == 'SINGLE') & (~df['Advies'].str.contains('SPLITSEN', na=False))
-                clean_df = df[clean_mask].copy()
-                if 'Type' in clean_df.columns:
-                    clean_df = clean_df.drop(columns=['Type'])
-                clean_df.to_excel(writer, sheet_name='Analyseresultaten', index=False)
-                
-                # Sheet 2: Te Splitsen & Complex
-                # - PARENT and CHILD types
-                # - SINGLE types WITH SPLITSEN in Advies
-                complex_mask = (df['Type'].isin(['PARENT', 'CHILD'])) | ((df['Type'] == 'SINGLE') & (df['Advies'].str.contains('SPLITSEN', na=False)))
-                complex_df = df[complex_mask].copy()
-                if 'Type' in complex_df.columns:
-                    complex_df = complex_df.drop(columns=['Type'])
-                complex_df.to_excel(writer, sheet_name='Te Splitsen & Complex', index=False)
-                
-                logger.info(f"Dual-sheet Excel: {len(clean_df)} clean, {len(complex_df)} complex")
+            # Split long texts (>800 characters) into separate sheet
+            max_text_length = self.config.analysis_rules.max_text_length  # Default: 800
+
+            # Identify long text rows (check if Reden mentions "te lang" or actual text length)
+            long_text_mask = df['Tekst'].str.len() > max_text_length
+
+            # Split into two DataFrames
+            long_texts_df = df[long_text_mask].copy()
+            normal_df = df[~long_text_mask].copy()
+
+            # Write normal results to main sheet
+            normal_df.to_excel(writer, sheet_name='Analyseresultaten', index=False)
+            logger.info(f"Analyseresultaten sheet: {len(normal_df)} rows")
+
+            # Write long texts to separate sheet (if any)
+            if not long_texts_df.empty:
+                long_texts_df.to_excel(writer, sheet_name='Lange teksten', index=False)
+                logger.info(f"Lange teksten sheet: {len(long_texts_df)} rows (>{max_text_length} characters)")
             else:
-                # Legacy mode: Single sheet
-                df.to_excel(writer, sheet_name=self.config.export.excel_sheet_name, index=False)
-            
+                logger.info("No long texts to separate")
+
             # Optional summary sheet
             if include_summary and clusters and advice_map:
                 summary_df = self.build_cluster_summary(clusters, advice_map)
                 summary_df.to_excel(writer, sheet_name='Cluster Samenvatting', index=False)
-        
+
         logger.info("Generated Excel file")
         return output.getvalue()
     
