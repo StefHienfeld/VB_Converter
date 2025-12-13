@@ -56,11 +56,34 @@ const Index = () => {
   const [stats, setStats] = useState<JobStatusResponse["stats"] | null>(null);
   const [inputView, setInputView] = useState<"full" | "compact">("full");
   const [pollingStartTime, setPollingStartTime] = useState<number | null>(null);
+  const [currentProgress, setCurrentProgress] = useState<number>(0);
+  const [currentMessage, setCurrentMessage] = useState<string>("");
 
   const handlePolicyUpload = useCallback(
-    (files: File[]) => {
+    async (files: File[]) => {
       const file = files[0];
       setPolicyFile(file);
+
+      // Estimate row count for time prediction
+      try {
+        const text = await file.text();
+        let rows = 0;
+
+        if (file.name.endsWith('.csv')) {
+          // Count lines in CSV (excluding header)
+          rows = text.split('\n').filter(line => line.trim()).length - 1;
+        } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+          // For Excel, rough estimate based on file size
+          // Typically ~200 bytes per row with text content
+          rows = Math.floor(file.size / 200);
+        }
+
+        setEstimatedRows(Math.max(0, rows));
+      } catch (err) {
+        // Fallback estimate based on file size
+        setEstimatedRows(Math.floor(file.size / 200));
+      }
+
       toast({
         title: "Bestand geüpload",
         description: `${file.name} is succesvol toegevoegd.`,
@@ -116,10 +139,18 @@ const Index = () => {
         status: "pending",
       })),
     );
+    setCurrentProgress(0);
+    setCurrentMessage("");
   }, []);
 
   const updateProgressFromBackend = useCallback((status: JobStatusResponse) => {
     const p = status.progress ?? 0;
+    const msg = status.message ?? "";
+
+    // Update progress percentage and message
+    setCurrentProgress(p);
+    setCurrentMessage(msg);
+
     setProgressSteps((prev) =>
       prev.map((step, idx) => {
         if (p >= 95) {
@@ -449,6 +480,8 @@ const Index = () => {
             <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)] gap-4 items-start">
               <AnalysisProgress
                 steps={progressSteps}
+                currentProgress={currentProgress}
+                currentMessage={currentMessage}
                 className="order-2 lg:order-1 animate-fade-up animation-delay-200"
               >
                 {analysisComplete && (

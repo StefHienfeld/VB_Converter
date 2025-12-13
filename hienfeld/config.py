@@ -63,7 +63,8 @@ class ConditionsMatchConfig:
 class AnalysisRuleConfig:
     """Configuration for analysis rules and thresholds."""
     frequency_standardize_threshold: int = 20
-    
+    max_text_length: int = 800  # NEW: Max length before manual check required
+
     # Conditions matching config
     conditions_match: ConditionsMatchConfig = field(default_factory=ConditionsMatchConfig)
     
@@ -372,7 +373,7 @@ class SemanticConfig:
             weight_tfidf=0.0,
             weight_synonyms=0.0,
             weight_embeddings=0.0,
-            time_multiplier=0.5,
+            time_multiplier=0.05,  # OPTIMIZED: Fast mode is ~20x faster than Balanced (was 0.5)
             description="Snelste modus - RapidFuzz + Lemma matching. Ideaal voor datasets <1000 rijen."
         ),
         AnalysisMode.BALANCED: ModeConfig(
@@ -382,15 +383,15 @@ class SemanticConfig:
             enable_nlp=True,
             enable_tfidf=True,
             enable_synonyms=True,
-            skip_embeddings_threshold=0.85,
+            skip_embeddings_threshold=0.92,  # OPTIMIZED: Only use embeddings for tricky cases (was 0.85)
             batch_embeddings=True,
             use_embedding_cache=True,
             cache_size=5000,
-            weight_rapidfuzz=0.25,
-            weight_lemmatized=0.20,
+            weight_rapidfuzz=0.30,  # Increased from 0.25
+            weight_lemmatized=0.25,  # Increased from 0.20
             weight_tfidf=0.15,
             weight_synonyms=0.15,
-            weight_embeddings=0.25,
+            weight_embeddings=0.15,  # Decreased from 0.25 - less reliance on slow embeddings
             time_multiplier=1.0,
             description="Aanbevolen - Goede balans tussen snelheid en nauwkeurigheid. Voor alle datasets."
         ),
@@ -401,7 +402,7 @@ class SemanticConfig:
             enable_nlp=True,
             enable_tfidf=True,
             enable_synonyms=True,
-            skip_embeddings_threshold=0.95,  # Only skip if nearly identical
+            skip_embeddings_threshold=0.90,  # Use embeddings more often, but still skip obvious matches (was 0.95)
             batch_embeddings=True,
             use_embedding_cache=True,
             cache_size=10000,
@@ -410,7 +411,7 @@ class SemanticConfig:
             weight_tfidf=0.15,
             weight_synonyms=0.15,
             weight_embeddings=0.30,
-            time_multiplier=2.0,
+            time_multiplier=2.5,  # OPTIMIZED: Accurate mode is ~2.5x slower than Balanced (was 2.0)
             description="Beste Nederlandse modellen - Maximale nauwkeurigheid voor complexe datasets."
         )
     })

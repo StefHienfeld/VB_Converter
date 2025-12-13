@@ -11,12 +11,44 @@ interface AnalysisProgressProps {
   steps: ProgressStep[];
   className?: string;
   children?: React.ReactNode;
+  currentProgress?: number; // NEW: Progress percentage (0-100)
+  currentMessage?: string;  // NEW: Current backend message
 }
 
-export const AnalysisProgress = ({ steps, className, children }: AnalysisProgressProps) => {
+export const AnalysisProgress = ({
+  steps,
+  className,
+  children,
+  currentProgress,
+  currentMessage
+}: AnalysisProgressProps) => {
   return (
     <div className={cn("floating-card p-6", className)}>
-      <h3 className="text-base font-semibold text-foreground mb-6">Voortgang</h3>
+      <div className="flex items-center justify-between mb-6">
+        <h3 className="text-base font-semibold text-foreground">Voortgang</h3>
+        {currentProgress !== undefined && (
+          <span className="text-sm font-semibold text-primary">
+            {currentProgress}%
+          </span>
+        )}
+      </div>
+
+      {/* Progress Bar */}
+      {currentProgress !== undefined && (
+        <div className="mb-6">
+          <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-primary to-secondary transition-all duration-500 ease-out"
+              style={{ width: `${currentProgress}%` }}
+            />
+          </div>
+          {currentMessage && (
+            <p className="text-xs text-muted-foreground mt-2 italic">
+              {currentMessage}
+            </p>
+          )}
+        </div>
+      )}
       
       <div className="space-y-4">
         {steps.map((step, index) => (

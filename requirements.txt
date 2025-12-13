@@ -66,3 +66,4 @@ openai>=1.0.0
 
 # Encoding detection (auto-detect file encodings)
 # chardet>=5.0.0
+slowapi

@@ -2,8 +2,9 @@
 """
 Service for analyzing clusters and generating advice.
 
-Implements a 4-step WATERFALL PIPELINE:
+Implements a 5-step WATERFALL PIPELINE:
 0. ADMIN CHECK - Hygiene issues (empty, outdated, placeholders) -> CLEAN/COMPLETE/DELETE
+0.5. CUSTOM INSTRUCTIONS CHECK - User-defined rules matched semantically -> CUSTOM ACTION
 1. CLAUSE LIBRARY CHECK - Match against standard clauses -> REPLACE
 2. POLICY CONDITIONS CHECK - Match against conditions -> DELETE (redundant)
 3. COMPLIANCE CHECK - LLM analysis for conflicts -> CONFLICT/EXTENSION/LIMITATION
@@ -34,13 +35,20 @@ class AnalysisService:
     """
     Analyzes clusters and generates actionable advice.
     
-    WATERFALL PIPELINE (4 STEPS):
+    WATERFALL PIPELINE (5 STEPS):
     
     ┌─────────────────────────────────────────────────────────────┐
-    │  STEP 0: ADMIN CHECK (NEW)                                  │
+    │  STEP 0: ADMIN CHECK                                        │
     │  Hygiene issues: empty, outdated dates, placeholders        │
     │  Issue found? → OPSCHONEN/AANVULLEN/VERWIJDEREN             │
-    │  No issues? → Continue to Step 1                            │
+    │  No issues? → Continue to Step 0.5                          │
+    └─────────────────────────────────────────────────────────────┘
+                               ↓
+    ┌─────────────────────────────────────────────────────────────┐
+    │  STEP 0.5: CUSTOM INSTRUCTIONS CHECK (NEW)                  │
+    │  User-defined rules matched semantically against input      │
+    │  Match found? → Return custom action from user              │
+    │  No match? → Continue to Step 1                             │
     └─────────────────────────────────────────────────────────────┘
                                ↓
     ┌─────────────────────────────────────────────────────────────┐
@@ -76,7 +84,7 @@ class AnalysisService:
     SEMANTIC_HIGH_THRESHOLD = 0.80    # High confidence semantic match
     
     # Brei-detection settings
-    BREI_MIN_LENGTH = 800  # Minimum text length for brei detection
+    # BREI_MIN_LENGTH removed - now using config.analysis_rules.max_text_length instead
     
     def __init__(
         self, 
@@ -86,7 +94,8 @@ class AnalysisService:
         semantic_similarity_service: Optional[SemanticSimilarityService] = None,
         hybrid_similarity_service=None,
         clause_library_service=None,
-        admin_check_service=None
+        admin_check_service=None,
+        custom_instructions_service=None
     ):
         """
         Initialize the analysis service.
@@ -99,11 +108,13 @@ class AnalysisService:
             hybrid_similarity_service: Optional HybridSimilarityService for enhanced matching
             clause_library_service: Service for clause library lookups
             admin_check_service: Service for administrative/hygiene checks (Step 0)
+            custom_instructions_service: Service for user-defined custom rules (Step 0.5)
         """
         self.config = config
         self.ai_analyzer = ai_analyzer
         self.clause_library_service = clause_library_service
         self.admin_check_service = admin_check_service
+        self.custom_instructions_service = custom_instructions_service
         
         # Similarity service for comparing against conditions (text-based)
         if similarity_service is None:
@@ -124,6 +135,43 @@ class AnalysisService:
         # Cache for policy sections
         self._policy_sections: List[PolicyDocumentSection] = []
         self._policy_full_text: str = ""
+        self._policy_section_lookup: Dict[str, PolicyDocumentSection] = {}
+
+    def _format_section_reference(self, section: PolicyDocumentSection) -> str:
+        """
+        Format a human-friendly, non-hallucinated reference for Excel output.
+
+        Hard rule: never invent numbers/titles/pages. Only use fields that exist on the section.
+        """
+        if not section:
+            return "Voorwaarden"
+
+        section_id = (section.id or "").strip()
+        title = (section.title or "").strip()
+
+        # Preferred: real article numbering
+        if section_id.startswith("Art "):
+            if title:
+                ref = f"{section_id} – {title}"
+                # Trim if too long for Excel readability (max 80 chars)
+                if len(ref) > 80:
+                    ref = ref[:77] + "..."
+                return ref
+            return section_id or "Voorwaarden"
+
+        # Fallback: file + page
+        document = (section.document_id or "").strip() or "Voorwaarden"
+        page = section.page_number
+        if isinstance(page, int) and page > 0:
+            return f"{document}, pagina {page}"
+        return f"{document}, pagina onbekend"
+
+    def _find_matching_section(self, text: str) -> Optional[PolicyDocumentSection]:
+        """Find the first section where the given text appears (substring match)."""
+        for section in self._policy_sections:
+            if section.simplified_text and text in section.simplified_text:
+                return section
+        return None
     
     def set_clause_library_service(self, service) -> None:
         """
@@ -155,6 +203,17 @@ class AnalysisService:
         self.hybrid_similarity_service = service
         self._hybrid_enabled = service is not None
         logger.info("Hybrid similarity service configured for analysis (v3.0 semantic enhancement)")
+    
+    def set_custom_instructions_service(self, service) -> None:
+        """
+        Set the custom instructions service for user-defined rules (Step 0.5).
+        
+        Args:
+            service: CustomInstructionsService instance
+        """
+        self.custom_instructions_service = service
+        if service and service.is_loaded:
+            logger.info(f"Custom instructions service configured: {service.instruction_count} regels")
     
     def _index_sections_for_semantic_search(self) -> None:
         """
@@ -222,6 +281,7 @@ class AnalysisService:
         
         # Store policy sections for comparison
         self._policy_sections = policy_sections or []
+        self._policy_section_lookup = {s.id: s for s in self._policy_sections if s and s.id}
         
         # Build combined policy text for substring matching
         if self._policy_sections:
@@ -252,6 +312,12 @@ class AnalysisService:
         else:
             logger.info("ℹ️ Admin check service not configured - Step 0 wordt overgeslagen")
         
+        # Log custom instructions status (Step 0.5)
+        if self.custom_instructions_service and self.custom_instructions_service.is_loaded:
+            logger.info(f"✅ Custom instructions loaded: {self.custom_instructions_service.instruction_count} regels (Step 0.5 active)")
+        else:
+            logger.info("ℹ️ Geen custom instructions - Step 0.5 wordt overgeslagen")
+        
         # Index sections for semantic search (Step 2b)
         if self.semantic_similarity_service:
             self._index_sections_for_semantic_search()
@@ -277,6 +343,7 @@ class AnalysisService:
         # Track statistics per step
         stats = {
             'step0_admin_issues': 0,
+            'step05_custom_instructions': 0,  # Custom user instructions match
             'step1_library_match': 0,
             'step2_conditions_match': 0,
             'step2_semantic_match': 0,  # Semantic matches (embedding + LLM verified)
@@ -349,6 +416,7 @@ class AnalysisService:
         # Analyze using waterfall pipeline (without stats tracking)
         stats = {
             'step0_admin_issues': 0,
+            'step05_custom_instructions': 0,
             'step1_library_match': 0,
             'step2_conditions_match': 0,
             'step3_fallback': 0,
@@ -388,6 +456,15 @@ class AnalysisService:
                 return admin_advice
         
         # ============================================================
+        # STEP 0.5: CUSTOM INSTRUCTIONS CHECK (User-defined rules)
+        # Matches input text against user-provided instructions semantically
+        # ============================================================
+        custom_advice = self._step05_custom_instructions_check(cluster)
+        if custom_advice:
+            stats['step05_custom_instructions'] += 1
+            return custom_advice
+        
+        # ============================================================
         # PRE-CHECK: Skip very short texts
         # (Note: this is also checked by AdminCheckService, but kept as fallback)
         # ============================================================
@@ -404,22 +481,17 @@ class AnalysisService:
             )
         
         # ============================================================
-        # PRE-CHECK: Multi-clause detection (BREI) - IMPROVED
-        # Now requires BOTH length > 800 AND multiple codes
+        # PRE-CHECK: Text length check (NEW - simplified)
+        # If text is too long, flag for manual check (no automatic splitting)
         # ============================================================
-        codes = re.findall(r'\b[0-9][A-Z]{2}[0-9]\b', text)
-        unique_codes = set(codes)
-        
-        # Only flag as BREI if text is long enough AND has multiple codes
-        if len(unique_codes) > 1 and len(text) > self.BREI_MIN_LENGTH:
-            stats['multi_clause'] += 1
+        if len(text) > self.config.analysis_rules.max_text_length:
             return AnalysisAdvice(
                 cluster_id=cluster.id,
-                advice_code=AdviceCode.SPLITSEN.value,
-                reason=f"Lange tekst ({len(text)} tekens) bevat {len(unique_codes)} clausulecodes ({', '.join(unique_codes)}). Splitsen aanbevolen.",
+                advice_code=AdviceCode.HANDMATIG_CHECKEN.value,
+                reason=f"Tekst te lang voor automatische analyse ({len(text)} karakters, max {self.config.analysis_rules.max_text_length})",
                 confidence=ConfidenceLevel.HOOG.value,
-                reference_article="Diverse",
-                category="MULTI_CLAUSE_BREI",
+                reference_article="-",
+                category="LONG_TEXT",
                 cluster_name=cluster.name,
                 frequency=frequency
             )
@@ -448,6 +520,49 @@ class AnalysisService:
         # ============================================================
         stats['step3_fallback'] += 1
         return self._step3_fallback_analysis(cluster)
+    
+    def _step05_custom_instructions_check(self, cluster: Cluster) -> Optional[AnalysisAdvice]:
+        """
+        STEP 0.5: Check against custom user instructions.
+        
+        User-defined rules are matched semantically against the input text.
+        If a match is found, the custom action from the user is returned.
+        
+        Args:
+            cluster: Cluster to check
+            
+        Returns:
+            AnalysisAdvice with custom action if match found, None otherwise
+        """
+        if not self.custom_instructions_service or not self.custom_instructions_service.is_loaded:
+            return None
+        
+        text = cluster.original_text
+        if not text or len(text) < 10:
+            return None
+        
+        # Find matching custom instruction
+        match = self.custom_instructions_service.find_match(text)
+        
+        if match is None:
+            return None
+        
+        # Create advice with the custom action from the user
+        logger.debug(
+            f"Step 0.5 hit: Custom instruction match for cluster {cluster.id} "
+            f"(score: {match.score:.2f}, action: {match.instruction.action})"
+        )
+        
+        return AnalysisAdvice(
+            cluster_id=cluster.id,
+            advice_code=f"📋 {match.instruction.action}",
+            reason=f"Komt overeen met instructie: '{match.instruction.search_text}' ({int(match.score*100)}% match)",
+            confidence=ConfidenceLevel.HOOG.value if match.score >= 0.85 else ConfidenceLevel.MIDDEN.value,
+            reference_article="Custom instructie",
+            category="CUSTOM_INSTRUCTION",
+            cluster_name=cluster.name,
+            frequency=cluster.frequency
+        )
     
     def _step1_clause_library_check(self, cluster: Cluster) -> Optional[AnalysisAdvice]:
         """
@@ -523,24 +638,28 @@ class AnalysisService:
         
         # Strategy 1: Exact substring match
         if self._policy_full_text and simple_text in self._policy_full_text:
-            matching_article = self._find_matching_article(simple_text)
-            
-            return AnalysisAdvice(
-                cluster_id=cluster.id,
-                advice_code=AdviceCode.VERWIJDEREN.value,
-                reason=f"Tekst komt EXACT voor in de voorwaarden. Kan verwijderd worden.",
-                confidence=ConfidenceLevel.HOOG.value,
-                reference_article=matching_article or "Voorwaarden",
-                category="CONDITIONS_EXACT",
-                cluster_name=cluster.name,
-                frequency=cluster.frequency
-            )
+            matching_section = self._find_matching_section(simple_text)
+            # Only return a reference if we can attribute it to a specific section.
+            # If the match spans section boundaries (rare but possible due to concatenation),
+            # fall back to Strategy 2 to obtain a concrete section reference.
+            if matching_section:
+                return AnalysisAdvice(
+                    cluster_id=cluster.id,
+                    advice_code=AdviceCode.VERWIJDEREN.value,
+                    reason=f"Tekst komt EXACT voor in de voorwaarden. Kan verwijderd worden.",
+                    confidence=ConfidenceLevel.HOOG.value,
+                    reference_article=self._format_section_reference(matching_section),
+                    category="CONDITIONS_EXACT",
+                    cluster_name=cluster.name,
+                    frequency=cluster.frequency
+                )
         
         # Strategy 2: Fuzzy match per section
         best_match = self._find_best_section_match(simple_text)
         
         if best_match:
             score, section = best_match
+            section_ref = self._format_section_reference(section)
             
             if score >= self.EXACT_MATCH_THRESHOLD:
                 return AnalysisAdvice(
@@ -548,7 +667,7 @@ class AnalysisService:
                     advice_code=AdviceCode.VERWIJDEREN.value,
                     reason=f"Tekst komt bijna letterlijk voor in voorwaarden ({int(score*100)}% match). Kan verwijderd worden.",
                     confidence=ConfidenceLevel.HOOG.value,
-                    reference_article=section.id,
+                    reference_article=section_ref,
                     category="CONDITIONS_NEAR_EXACT",
                     cluster_name=cluster.name,
                     frequency=cluster.frequency
@@ -558,9 +677,9 @@ class AnalysisService:
                 return AnalysisAdvice(
                     cluster_id=cluster.id,
                     advice_code=AdviceCode.VERWIJDEREN.value,
-                    reason=f"Tekst lijkt sterk op {section.id} ({int(score*100)}% match). Controleer en verwijder indien identiek.",
+                    reason=f"Tekst lijkt sterk op {section_ref} ({int(score*100)}% match). Controleer en verwijder indien identiek.",
                     confidence=ConfidenceLevel.MIDDEN.value,
-                    reference_article=section.id,
+                    reference_article=section_ref,
                     category="CONDITIONS_HIGH_SIMILARITY",
                     cluster_name=cluster.name,
                     frequency=cluster.frequency
@@ -570,9 +689,9 @@ class AnalysisService:
                 return AnalysisAdvice(
                     cluster_id=cluster.id,
                     advice_code=AdviceCode.HANDMATIG_CHECKEN.value,
-                    reason=f"Vertoont gelijkenis met {section.id} ({int(score*100)}% match). Controleer of dit een variant is.",
+                    reason=f"Vertoont gelijkenis met {section_ref} ({int(score*100)}% match). Controleer of dit een variant is.",
                     confidence=ConfidenceLevel.LAAG.value,
-                    reference_article=section.id,
+                    reference_article=section_ref,
                     category="CONDITIONS_MEDIUM_SIMILARITY",
                     cluster_name=cluster.name,
                     frequency=cluster.frequency
@@ -646,24 +765,33 @@ class AnalysisService:
         
         # Without LLM verification, only accept very high similarity matches
         if best_match.score >= self.SEMANTIC_HIGH_THRESHOLD:
+            # Prefer section lookup (contains document_id/page_number). Fall back to metadata if needed.
+            section = self._policy_section_lookup.get(best_match.text_id)
+            ref = self._format_section_reference(section) if section else (
+                f"{best_match.text_id} – {best_match.metadata.get('title')}" if best_match.metadata and best_match.metadata.get('title') else best_match.text_id
+            )
             return AnalysisAdvice(
                 cluster_id=cluster.id,
                 advice_code=AdviceCode.VERWIJDEREN.value,
-                reason=f"Semantisch identiek aan {best_match.text_id} ({int(best_match.score*100)}% betekenis-match). Tekst heeft dezelfde betekenis als de voorwaarden.",
+                reason=f"Semantisch identiek aan {ref} ({int(best_match.score*100)}% betekenis-match). Tekst heeft dezelfde betekenis als de voorwaarden.",
                 confidence=ConfidenceLevel.MIDDEN.value,
-                reference_article=best_match.text_id,
+                reference_article=ref,
                 category="CONDITIONS_SEMANTIC_MATCH",
                 cluster_name=cluster.name,
                 frequency=cluster.frequency
             )
         
         # For lower scores without LLM, suggest manual review
+        section = self._policy_section_lookup.get(best_match.text_id)
+        ref = self._format_section_reference(section) if section else (
+            f"{best_match.text_id} – {best_match.metadata.get('title')}" if best_match.metadata and best_match.metadata.get('title') else best_match.text_id
+        )
         return AnalysisAdvice(
             cluster_id=cluster.id,
             advice_code=AdviceCode.HANDMATIG_CHECKEN.value,
-            reason=f"Mogelijke semantische overlap met {best_match.text_id} ({int(best_match.score*100)}% betekenis-match). Controleer of de betekenis identiek is.",
+            reason=f"Mogelijke semantische overlap met {ref} ({int(best_match.score*100)}% betekenis-match). Controleer of de betekenis identiek is.",
             confidence=ConfidenceLevel.LAAG.value,
-            reference_article=best_match.text_id,
+            reference_article=ref,
             category="CONDITIONS_SEMANTIC_POSSIBLE",
             cluster_name=cluster.name,
             frequency=cluster.frequency
@@ -689,6 +817,8 @@ class AnalysisService:
             conditions_text = match.matched_text
             policy_text = cluster.leader_text
             article_ref = match.text_id
+            section = self._policy_section_lookup.get(match.text_id)
+            formatted_ref = self._format_section_reference(section) if section else article_ref
             
             # Call LLM to verify
             verification = self.ai_analyzer.verify_semantic_match(
@@ -704,9 +834,9 @@ class AnalysisService:
                 return AnalysisAdvice(
                     cluster_id=cluster.id,
                     advice_code=AdviceCode.VERWIJDEREN.value,
-                    reason=f"Semantisch identiek aan {article_ref} ({int(match.score*100)}% match, LLM bevestigd). {verification.explanation}",
+                    reason=f"Semantisch identiek aan {formatted_ref} ({int(match.score*100)}% match, LLM bevestigd). {verification.explanation}",
                     confidence=confidence,
-                    reference_article=article_ref,
+                    reference_article=formatted_ref,
                     category="CONDITIONS_SEMANTIC_VERIFIED",
                     cluster_name=cluster.name,
                     frequency=cluster.frequency
@@ -714,16 +844,16 @@ class AnalysisService:
             else:
                 # LLM says different meaning -> manual check
                 if verification.differences:
-                    reason = f"Lijkt op {article_ref} maar heeft andere betekenis: {verification.differences}"
+                    reason = f"Lijkt op {formatted_ref} maar heeft andere betekenis: {verification.differences}"
                 else:
-                    reason = f"Lijkt op {article_ref} maar LLM ziet belangrijke verschillen. {verification.explanation}"
+                    reason = f"Lijkt op {formatted_ref} maar LLM ziet belangrijke verschillen. {verification.explanation}"
                 
                 return AnalysisAdvice(
                     cluster_id=cluster.id,
                     advice_code=AdviceCode.HANDMATIG_CHECKEN.value,
                     reason=reason,
                     confidence=ConfidenceLevel.MIDDEN.value,
-                    reference_article=article_ref,
+                    reference_article=formatted_ref,
                     category="CONDITIONS_SEMANTIC_DIFFERENT",
                     cluster_name=cluster.name,
                     frequency=cluster.frequency
@@ -733,12 +863,14 @@ class AnalysisService:
             logger.warning(f"LLM semantic verification failed: {e}")
             # Fall back to embedding-only result
             if match.score >= self.SEMANTIC_HIGH_THRESHOLD:
+                section = self._policy_section_lookup.get(match.text_id)
+                formatted_ref = self._format_section_reference(section) if section else match.text_id
                 return AnalysisAdvice(
                     cluster_id=cluster.id,
                     advice_code=AdviceCode.VERWIJDEREN.value,
-                    reason=f"Semantisch identiek aan {match.text_id} ({int(match.score*100)}% betekenis-match). LLM verificatie mislukt, maar score is hoog.",
+                    reason=f"Semantisch identiek aan {formatted_ref} ({int(match.score*100)}% betekenis-match). LLM verificatie mislukt, maar score is hoog.",
                     confidence=ConfidenceLevel.MIDDEN.value,
-                    reference_article=match.text_id,
+                    reference_article=formatted_ref,
                     category="CONDITIONS_SEMANTIC_MATCH",
                     cluster_name=cluster.name,
                     frequency=cluster.frequency
@@ -815,7 +947,7 @@ class AnalysisService:
         )
     
     def _find_best_section_match(
-        self, 
+        self,
         text: str
     ) -> Optional[Tuple[float, PolicyDocumentSection]]:
         """
@@ -829,7 +961,8 @@ class AnalysisService:
 
         # OPTIMIZED: Use hybrid service's batch matching
         if self._hybrid_enabled and self.hybrid_similarity_service:
-            candidates = [s.simplified_text for s in self._policy_sections if s.simplified_text]
+            sections_with_text = [s for s in self._policy_sections if s.simplified_text]
+            candidates = [s.simplified_text for s in sections_with_text]
             if not candidates:
                 return None
 
@@ -841,7 +974,8 @@ class AnalysisService:
 
             if match_result:
                 best_idx, best_score, _ = match_result
-                best_section = self._policy_sections[best_idx]
+                # IMPORTANT: best_idx refers to the candidates list, not the full _policy_sections list
+                best_section = sections_with_text[best_idx]
 
                 # Also check for substring match (exact match bonus)
                 if text in best_section.simplified_text:
@@ -879,13 +1013,6 @@ class AnalysisService:
 
         return None
     
-    def _find_matching_article(self, text: str) -> Optional[str]:
-        """Find the article where the text appears."""
-        for section in self._policy_sections:
-            if section.simplified_text and text in section.simplified_text:
-                return section.id
-        return None
-    
     def _check_significant_fragments(self, text: str) -> Optional[dict]:
         """Check if significant fragments appear in conditions."""
         if not self._policy_full_text or len(text) < 50:
@@ -898,19 +1025,19 @@ class AnalysisService:
             return None
         
         matches_found = 0
-        matching_articles = set()
+        matching_refs = set()
         
         for sentence in sentences:
             if sentence in self._policy_full_text:
                 matches_found += 1
-                article = self._find_matching_article(sentence)
-                if article:
-                    matching_articles.add(article)
+                section = self._find_matching_section(sentence)
+                if section:
+                    matching_refs.add(self._format_section_reference(section))
         
         match_ratio = matches_found / len(sentences) if sentences else 0
         
         if match_ratio >= 0.5 and matches_found >= 2:
-            articles_str = ", ".join(matching_articles) if matching_articles else "Voorwaarden"
+            articles_str = ", ".join(sorted(matching_refs)) if matching_refs else "Voorwaarden"
             return {
                 'match_found': True,
                 'reason': f"Meerdere zinnen ({matches_found}/{len(sentences)}) komen voor in voorwaarden.",
@@ -1041,11 +1168,12 @@ class AnalysisService:
         logger.info("=" * 60)
         logger.info("WATERFALL PIPELINE SAMENVATTING")
         logger.info("=" * 60)
-        logger.info(f"Step 0 - Admin issues (hygiëne): {stats.get('step0_admin_issues', 0)}")
-        logger.info(f"Step 1 - Clause Library matches: {stats['step1_library_match']}")
-        logger.info(f"Step 2 - Conditions matches: {stats['step2_conditions_match']}")
+        logger.info(f"Step 0   - Admin issues (hygiëne): {stats.get('step0_admin_issues', 0)}")
+        logger.info(f"Step 0.5 - Custom instructions: {stats.get('step05_custom_instructions', 0)}")
+        logger.info(f"Step 1   - Clause Library matches: {stats['step1_library_match']}")
+        logger.info(f"Step 2   - Conditions matches: {stats['step2_conditions_match']}")
         logger.info(f"  └─ Waarvan semantische matches: {semantic_matches}")
-        logger.info(f"Step 3 - Fallback analysis: {stats['step3_fallback']}")
+        logger.info(f"Step 3   - Fallback analysis: {stats['step3_fallback']}")
         logger.info(f"Multi-clause (brei) detected: {stats['multi_clause']}")
         logger.info("")
         logger.info("Per adviestype:")

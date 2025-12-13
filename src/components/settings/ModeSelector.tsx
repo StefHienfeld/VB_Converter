@@ -21,14 +21,14 @@ const MODES: ModeInfo[] = [
     label: "Fast",
     icon: Zap,
     description: "Snelle analyse met basis tekstmatching (RapidFuzz + Lemma)",
-    timeMultiplier: 0.5,
+    timeMultiplier: 0.05, // ~20x faster than balanced - seconds instead of minutes
   },
   {
     value: "balanced",
     label: "Balanced",
     icon: Scale,
     description: "Optimale balans tussen snelheid en nauwkeurigheid",
-    timeMultiplier: 1.0,
+    timeMultiplier: 1.0, // Baseline - ~10 minutes for 1660 rows
     recommended: true,
   },
   {
@@ -36,7 +36,7 @@ const MODES: ModeInfo[] = [
     label: "Accurate",
     icon: Target,
     description: "Beste Nederlandse modellen voor maximale nauwkeurigheid",
-    timeMultiplier: 2.0,
+    timeMultiplier: 2.5, // ~2.5x slower than balanced - ~25 minutes for 1660 rows
   },
 ];
 
@@ -53,15 +53,21 @@ export function ModeSelector({ value, onChange, estimatedRows, className }: Mode
       return "";
     }
 
-    // Base time: ~0.08s per row for balanced mode
-    const baseTimePerRow = 0.08;
+    // Base time calibrated from empirical data:
+    // 1660 rows: Fast=4s, Balanced=~10min (600s), Accurate=~25min (1500s)
+    // Balanced base: 600s / 1660 rows = 0.36s per row
+    const baseTimePerRow = 0.36;
     const totalSeconds = estimatedRows * baseTimePerRow * mode.timeMultiplier;
 
     if (totalSeconds < 60) {
       return `~${Math.ceil(totalSeconds)}s`;
-    } else {
+    } else if (totalSeconds < 3600) {
       const minutes = Math.ceil(totalSeconds / 60);
-      return `~${minutes}m`;
+      return `~${minutes} min`;
+    } else {
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.ceil((totalSeconds % 3600) / 60);
+      return `~${hours}u ${minutes}m`;
     }
   };
 

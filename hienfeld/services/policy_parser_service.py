@@ -53,8 +53,9 @@ class PolicyParserService:
             (r'^\s*Artikel\s+(\d+(?:\.\d+)?)\s*[:\.\-]?\s*(.*)$', 'artikel'),
             # "Art. 1.2" or "Art 1"
             (r'^\s*Art\.?\s+(\d+(?:\.\d+)?)\s*[:\.\-]?\s*(.*)$', 'art'),
-            # Numbered sections like "1.1 Title" or "2.3.4 Title" (at start of line)
-            (r'^(\d+(?:\.\d+)+)\s+([A-Z][a-zA-Z\s]+.*)$', 'numbered'),
+            # Numbered sections like "1.1", "1.1 Title", "2.3.4", "2.3.4 Title" (at start of line)
+            # Note: title can be empty (common in PDFs where title is on next line)
+            (r'^(\d+(?:\.\d+)+)\s*[:\.\-]?\s*(.*)$', 'numbered_any'),
             # Single number with title "1 Algemeen" (but NOT years like "1979")
             (r'^(\d{1,2})\s+([A-Z][a-zA-Z\s]{3,}.*)$', 'single_num'),
         ]
@@ -221,19 +222,56 @@ class PolicyParserService:
         Returns:
             List of sections
         """
-        sections = []
-        current_section = None
-        current_text = []
-        
+        sections: List[PolicyDocumentSection] = []
+        current_section: Optional[PolicyDocumentSection] = None
+        current_text: List[str] = []
+
         lines = text.split('\n')
-        
-        for line_num, line in enumerate(lines):
+
+        def _looks_like_title(candidate: str) -> bool:
+            """
+            Heuristic: decide if a line is likely a header/title line.
+            We must not invent titles; we only use the next line if it strongly looks like a header.
+            """
+            c = candidate.strip()
+            if not c:
+                return False
+            if len(c) > 120:
+                return False
+            # Titles rarely end with a sentence terminator
+            if re.search(r'[.!?]\s*$', c):
+                return False
+            # ALL CAPS headers are common
+            if c.isupper() and 5 < len(c) < 120:
+                return True
+            # Otherwise require an uppercase start and at least one letter
+            return c[0].isupper() and any(ch.isalpha() for ch in c)
+
+        idx = 0
+        while idx < len(lines):
+            line = lines[idx]
+
             # Check if line is an article heading
             article_info = self._detect_article_header(line)
-            
+
             if article_info:
                 article_num, title, pattern_type = article_info
-                
+
+                # For PDFs: numbered headers are sometimes split over two lines:
+                #   "10.1.1"
+                #   "Dekking in geval van leegstand"
+                # If we detect a numbered header with an empty title, peek ahead.
+                title_line = ""
+                if pattern_type == 'numbered_any' and not title:
+                    # Look ahead to the next non-empty line (but don't scan too far)
+                    lookahead = idx + 1
+                    while lookahead < len(lines) and not lines[lookahead].strip():
+                        lookahead += 1
+                    if lookahead < len(lines) and _looks_like_title(lines[lookahead]):
+                        title = lines[lookahead].strip()
+                        title_line = title
+                        idx = lookahead  # consume the title line in this header handling
+
                 # Save previous section
                 if current_section:
                     section_text = '\n'.join(current_text).strip()
@@ -241,7 +279,7 @@ class PolicyParserService:
                     current_section.simplified_text = simplify_text(section_text)
                     if not current_section.is_empty:
                         sections.append(current_section)
-                
+
                 # Start new section
                 current_section = PolicyDocumentSection(
                     id=f"Art {article_num}",
@@ -250,9 +288,18 @@ class PolicyParserService:
                     simplified_text="",
                     document_id=filename
                 )
+
+                # Include the detected title text as part of the section body as well,
+                # so matching and page anchoring have access to those words.
                 current_text = []
+                if title_line:
+                    current_text.append(title_line)
+                elif title:
+                    current_text.append(title)
             else:
                 current_text.append(line)
+
+            idx += 1
         
         # Don't forget last section
         if current_section:
@@ -504,15 +551,35 @@ class PolicyParserService:
         # Combine all text first
         full_text = "\n".join([text for _, text in page_texts])
         sections = self._segment_text(full_text, filename)
-        
-        # Try to assign page numbers (simplified approach)
-        # In a production system, this would track positions more carefully
+
+        # Try to assign page numbers.
+        # Hard rule: never invent a page number. Only set it if we can actually match an anchor.
+        def _normalize_anchor(s: str) -> str:
+            return re.sub(r'\s+', ' ', (s or "")).strip().lower()
+
+        normalized_pages = [(page_num, _normalize_anchor(page_text)) for page_num, page_text in page_texts]
+
         for section in sections:
-            for page_num, page_text in page_texts:
-                if section.title and section.title in page_text:
-                    section.page_number = page_num
-                    break
-        
+            # Strategy A: if we have a distinctive title, try that first
+            if section.title:
+                title_norm = _normalize_anchor(section.title)
+                if len(title_norm) >= 10:
+                    for page_num, page_norm in normalized_pages:
+                        if title_norm and title_norm in page_norm:
+                            section.page_number = page_num
+                            break
+
+            # Strategy B: anchor on the start of the section body
+            if section.page_number is None and section.raw_text:
+                body_norm = _normalize_anchor(section.raw_text)
+                anchor = body_norm[:200]
+                # Require some minimum length to avoid matching overly generic fragments
+                if len(anchor) >= 40:
+                    for page_num, page_norm in normalized_pages:
+                        if anchor in page_norm:
+                            section.page_number = page_num
+                            break
+
         return sections
     
     def _create_fallback_section(self, file_bytes: bytes, filename: str) -> PolicyDocumentSection:

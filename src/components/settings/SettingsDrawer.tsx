@@ -27,14 +27,14 @@ export const SettingsDrawer = ({
 }: SettingsDrawerProps) => {
   return (
     <Sheet open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <SheetContent className="glass-panel w-[400px] border-l-0 p-0">
-        <SheetHeader className="p-6 pb-0">
+      <SheetContent className="glass-panel w-[400px] border-l-0 p-0 flex flex-col">
+        <SheetHeader className="p-6 pb-0 shrink-0">
           <SheetTitle className="text-lg font-semibold text-foreground">
             Instellingen
           </SheetTitle>
         </SheetHeader>
 
-        <div className="p-6 space-y-8">
+        <div className="p-6 space-y-8 overflow-y-auto flex-1">
           {/* Analysis Mode Selector */}
           <ModeSelector
             value={settings.analysisMode}

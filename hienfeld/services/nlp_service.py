@@ -157,22 +157,86 @@ class NLPService:
     def get_noun_phrases(self, text: str) -> List[str]:
         """
         Extract noun phrases (key concepts) from text.
-        
+
         Args:
             text: Input text
-            
+
         Returns:
             List of noun phrases
         """
         if not self._available or not text:
             return []
-        
+
         try:
             doc = self._nlp(text)
             return [chunk.text.lower() for chunk in doc.noun_chunks]
         except Exception as e:
             logger.debug(f"Noun phrase extraction failed: {e}")
             return []
+
+    def extract_key_noun_phrases(self, text: str, max_phrases: int = 3) -> List[str]:
+        """
+        Extract key noun phrases for semantic cluster naming.
+
+        Filters out generic insurance phrases and returns the most meaningful concepts.
+
+        Args:
+            text: Input text (first 500 chars recommended for performance)
+            max_phrases: Maximum number of phrases to return
+
+        Returns:
+            List of meaningful noun phrases, ordered by relevance
+        """
+        if not self._available or not text:
+            return []
+
+        try:
+            # Limit text for performance
+            doc = self._nlp(text[:500])
+
+            # Extract noun chunks
+            noun_chunks = []
+            for chunk in doc.noun_chunks:
+                phrase = chunk.text.strip()
+                # Skip very short phrases
+                if len(phrase) < 4:
+                    continue
+                # Skip generic insurance phrases
+                if self._is_generic_phrase(phrase):
+                    continue
+                noun_chunks.append(phrase)
+
+            # Return top N most relevant (first occurrences are often more important)
+            return noun_chunks[:max_phrases]
+        except Exception as e:
+            logger.debug(f"Key noun phrase extraction failed: {e}")
+            return []
+
+    def _is_generic_phrase(self, phrase: str) -> bool:
+        """
+        Filter out generic insurance phrases that don't add semantic value.
+
+        Args:
+            phrase: Noun phrase to check
+
+        Returns:
+            True if phrase is generic and should be filtered out
+        """
+        generic = [
+            'de verzekering',
+            'de verzekerde',
+            'het bedrag',
+            'de hoogte',
+            'de polis',
+            'het polisblad',
+            'de verzekeraar',
+            'de maatschappij',
+            'de overeenkomst',
+            'het geval',
+            'de bepaling',
+            'het artikel',
+        ]
+        return phrase.lower() in generic
     
     def get_keywords(self, text: str, top_k: int = 10) -> List[str]:
         """

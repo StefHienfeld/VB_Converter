@@ -34,19 +34,22 @@ class ClusteringService:
     """
     
     def __init__(
-        self, 
-        config: AppConfig, 
-        similarity_service: Optional[SimilarityService] = None
+        self,
+        config: AppConfig,
+        similarity_service: Optional[SimilarityService] = None,
+        nlp_service: Optional['NLPService'] = None
     ):
         """
         Initialize the clustering service.
-        
+
         Args:
             config: Application configuration
             similarity_service: Service for computing text similarity
+            nlp_service: Optional NLP service for semantic cluster naming
         """
         self.config = config
-        
+        self.nlp_service = nlp_service
+
         # Use provided similarity service or create default
         if similarity_service is None:
             self.similarity_service = RapidFuzzSimilarityService(
@@ -113,8 +116,10 @@ class ClusteringService:
             logger.debug(f"Pre-computed {len(normalized_texts)} normalized texts")
 
         for i, clause in enumerate(sorted_clauses):
-            # Progress update
-            if progress_callback and i % 500 == 0:
+            # Progress update - more frequent updates for better UX
+            # Update every 50 items OR every 5% of total (whichever is more frequent)
+            update_interval = min(50, max(1, total // 20))
+            if progress_callback and i % update_interval == 0:
                 progress_callback(int(i / total * 100))
             
             text = clause.simplified_text
@@ -234,44 +239,88 @@ class ClusteringService:
         # Final progress update
         if progress_callback:
             progress_callback(100)
-        
+
         logger.info(f"Created {len(clusters)} clusters from {len(clauses)} clauses")
-        
+
+        # POST-PROCESSING: Group singleton clusters (frequency=1) into "Uniek" meta-clusters
+        # This will be done AFTER analysis, so we preserve individual analysis but group for display
+        # We return the original clusters here, grouping happens in export service
+
         return clusters, clause_to_cluster
     
     def _generate_cluster_name(self, text: str) -> str:
         """
         Generate a descriptive name for a cluster based on its leader text.
-        
+
+        NEW: Uses NLP noun phrase extraction for semantic names when available.
+
         Args:
             text: Leader clause text
-            
+
         Returns:
-            Human-readable cluster name
+            Human-readable cluster name (max 50 chars)
         """
         if not text:
             return "Onbekend"
-        
-        # Extract clause code if present
+
+        # Extract clause code if present (keep for prefix)
         code_match = re.search(r'\b[A-Z0-9]{3,4}\b', text)
         code = code_match.group(0) if code_match else ""
-        
+
+        # Step 1: Try NLP noun phrase extraction (NEW)
+        if self.nlp_service and self.nlp_service.is_available:
+            try:
+                noun_phrases = self.nlp_service.extract_key_noun_phrases(text, max_phrases=3)
+                if noun_phrases:
+                    # Join phrases and capitalize
+                    name = " ".join(noun_phrases).title()
+
+                    # Add code prefix if found and not already in name
+                    if code and code not in name:
+                        name = f"{code} {name}"
+
+                    # Trim if too long
+                    if len(name) > 50:
+                        name = name[:47] + "..."
+
+                    return name
+            except Exception as e:
+                logger.debug(f"NLP name generation failed: {e}, falling back to theme matching")
+
+        # Step 2: Fallback to theme keyword matching (existing logic)
         lower_text = text.lower()
-        
-        # Check known themes from config
+
         for theme_key, theme_name in self.config.cluster_naming.theme_patterns.items():
             if theme_key in lower_text:
                 # Special handling for premie + naverrekening
                 if theme_key == 'premie' and 'naverrekening' in lower_text:
-                    return f"{code} Premie Naverrekening".strip()
-                return f"{code} {theme_name}".strip()
-        
-        # Fallback: first N words
+                    name = f"{code} Premie Naverrekening".strip()
+                else:
+                    name = f"{code} {theme_name}".strip()
+
+                # Trim if too long
+                if len(name) > 50:
+                    name = name[:47] + "..."
+                return name
+
+        # Step 3: Final fallback - first N words (without "...")
         words = text.split()
         word_count = self.config.cluster_naming.fallback_word_count
+
         if len(words) > word_count:
-            return " ".join(words[:word_count]) + "..."
-        return text[:50] + "..." if len(text) > 50 else text
+            name = " ".join(words[:word_count])
+        else:
+            name = text
+
+        # Add code prefix if found
+        if code and code not in name:
+            name = f"{code} {name}"
+
+        # Trim to 50 chars max
+        if len(name) > 50:
+            name = name[:50].rsplit(' ', 1)[0]  # Trim at word boundary
+
+        return name
     
     def update_similarity_threshold(self, threshold: float) -> None:
         """
