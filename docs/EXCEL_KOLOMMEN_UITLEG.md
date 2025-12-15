@@ -53,9 +53,11 @@ De Excel heeft **één sheet**:
   - `📅 VERWIJDEREN (VERLOPEN)` - Verwijst naar verleden datum, niet meer relevant
   - `⚪ LEEG` - Lege tekst
   - `❌ ONLEESBAAR` - Tekst is onleesbaar/corrupt
+  - `📋 [CUSTOM ACTION]` - **NIEUW (v4.2):** Custom instructie match (bijv. `📋 Vullen in partijenkaart`)
 - **Doel:** Directe actie-aanbeveling voor elke clausule
 - **Gebruik:** Filter/sorteer op Advies om prioriteiten te stellen
 - **GEWIJZIGD (v4.0):** SPLITSEN/GESPLITST advies verwijderd - lange teksten krijgen "HANDMATIG CHECKEN"
+- **NIEUW (v4.2):** Custom instructies via tabel-interface - als zoektekst voorkomt in clausule → custom actie
 
 ### 5. **Vertrouwen**
 - **Wat:** Betrouwbaarheidsniveau van de analyse (Laag/Midden/Hoog)
@@ -75,6 +77,7 @@ De Excel heeft **één sheet**:
   - `"Hoge frequentie (20x), standaardiseren aanbevolen"`
   - `"Gesplitst in 3 onderdelen: 2x VERWIJDEREN, 1x BEHOUDEN"`
   - `"Bevat verouderde datum: 2020-01-15"`
+  - `"Komt overeen met instructie: 'meeverzekerde' (100% match)"` - **NIEUW (v4.2):** Custom instructie match
 
 ### 7. **Artikel** (VERBETERD)
 - **Wat:** Referentie naar artikel/sectie in de polisvoorwaarden (indien gevonden)

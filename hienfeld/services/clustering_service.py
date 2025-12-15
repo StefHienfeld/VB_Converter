@@ -183,20 +183,27 @@ class ClusteringService:
                     break
 
                 # Second try: match on normalized text (catches variable differences)
-                # Use pre-computed normalized text if available
-                if normalized_texts:
-                    leader_normalized = cluster_normalized_texts.get(cluster.id)
-                    if not leader_normalized:
-                        # Fallback: compute on-demand if not in cache (shouldn't happen)
+                # FIXED: Cache leader normalized text to avoid recomputing it 100+ times
+                leader_normalized = cluster_normalized_texts.get(cluster.id)
+                if not leader_normalized:
+                    # Compute on-demand and cache immediately
+                    if normalized_texts:
+                        # Get from pre-computed dict (faster)
+                        leader_clause_id = cluster.leader_clause.id
+                        leader_normalized = normalized_texts.get(leader_clause_id)
+                        if not leader_normalized:
+                            leader_normalized = normalize_for_clustering(cluster.original_text)
+                    else:
                         leader_normalized = normalize_for_clustering(cluster.original_text)
-                else:
-                    leader_normalized = normalize_for_clustering(cluster.original_text)
+
+                    # Cache for future comparisons
+                    cluster_normalized_texts[cluster.id] = leader_normalized
 
                 normalized_similarity = self.similarity_service.similarity(
                     leader_normalized,
                     normalized_text
                 )
-                
+
                 if normalized_similarity >= normalized_threshold:
                     logger.debug(
                         f"Matched via normalization: {normalized_similarity:.2f} "

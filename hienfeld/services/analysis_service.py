@@ -535,22 +535,30 @@ class AnalysisService:
             AnalysisAdvice with custom action if match found, None otherwise
         """
         if not self.custom_instructions_service or not self.custom_instructions_service.is_loaded:
+            logger.debug(f"Step 0.5: Skipped for cluster {cluster.id} (no service or not loaded)")
             return None
         
         text = cluster.original_text
         if not text or len(text) < 10:
+            logger.debug(f"Step 0.5: Skipped for cluster {cluster.id} (text too short: {len(text)} chars)")
             return None
+        
+        logger.debug(f"Step 0.5: Checking cluster {cluster.id} (text: '{text[:80]}...')")
         
         # Find matching custom instruction
         match = self.custom_instructions_service.find_match(text)
         
         if match is None:
+            logger.debug(
+                f"Step 0.5: ❌ No match for cluster {cluster.id} "
+                f"(text: '{text[:50]}...', {self.custom_instructions_service.instruction_count} instructions available)"
+            )
             return None
         
         # Create advice with the custom action from the user
-        logger.debug(
-            f"Step 0.5 hit: Custom instruction match for cluster {cluster.id} "
-            f"(score: {match.score:.2f}, action: {match.instruction.action})"
+        logger.info(
+            f"Step 0.5: ✅ MATCH for cluster {cluster.id}! "
+            f"(score: {match.score:.2f}, action: '{match.instruction.action}')"
         )
         
         return AnalysisAdvice(
@@ -660,7 +668,11 @@ class AnalysisService:
         if best_match:
             score, section = best_match
             section_ref = self._format_section_reference(section)
-            
+
+            # Score interpretation depends on whether hybrid similarity was used
+            # Hybrid similarity (multi-method) typically scores 0.10-0.20 lower than pure RapidFuzz
+            # for the same semantic similarity level
+
             if score >= self.EXACT_MATCH_THRESHOLD:
                 return AnalysisAdvice(
                     cluster_id=cluster.id,
@@ -672,7 +684,7 @@ class AnalysisService:
                     cluster_name=cluster.name,
                     frequency=cluster.frequency
                 )
-            
+
             elif score >= self.HIGH_SIMILARITY_THRESHOLD:
                 return AnalysisAdvice(
                     cluster_id=cluster.id,
@@ -684,7 +696,7 @@ class AnalysisService:
                     cluster_name=cluster.name,
                     frequency=cluster.frequency
                 )
-            
+
             elif score >= self.MEDIUM_SIMILARITY_THRESHOLD:
                 return AnalysisAdvice(
                     cluster_id=cluster.id,
@@ -693,6 +705,20 @@ class AnalysisService:
                     confidence=ConfidenceLevel.LAAG.value,
                     reference_article=section_ref,
                     category="CONDITIONS_MEDIUM_SIMILARITY",
+                    cluster_name=cluster.name,
+                    frequency=cluster.frequency
+                )
+
+            elif score >= 0.50:
+                # NEW: Lower threshold for hybrid similarity matches (paraphrases)
+                # Scores 0.50-0.75 from hybrid similarity often indicate semantic similarity
+                return AnalysisAdvice(
+                    cluster_id=cluster.id,
+                    advice_code=AdviceCode.HANDMATIG_CHECKEN.value,
+                    reason=f"Mogelijke overlap met {section_ref} ({int(score*100)}% semantische match). Controleer of betekenis identiek is.",
+                    confidence=ConfidenceLevel.LAAG.value,
+                    reference_article=section_ref,
+                    category="CONDITIONS_SEMANTIC_MATCH",
                     cluster_name=cluster.name,
                     frequency=cluster.frequency
                 )
@@ -893,18 +919,8 @@ class AnalysisService:
         simple_text = cluster.leader_text
         frequency = cluster.frequency
         
-        # Check for long text that might need splitting
-        if len(text) > self.config.multi_clause.max_text_length:
-            return AnalysisAdvice(
-                cluster_id=cluster.id,
-                advice_code=AdviceCode.SPLITSEN_CONTROLEREN.value,
-                reason=f"Tekst is erg lang ({len(text)} tekens), bevat mogelijk meerdere onderwerpen.",
-                confidence=ConfidenceLevel.MIDDEN.value,
-                reference_article="-",
-                category="LONG_TEXT",
-                cluster_name=cluster.name,
-                frequency=frequency
-            )
+        # NOTE: Long text check is already done in _analyze_with_waterfall (Step PRE-CHECK)
+        # This function only handles fallback analysis for normal-length texts
         
         # Keyword-based rules
         keyword_advice = self._check_keyword_rules(cluster, simple_text)
@@ -966,10 +982,14 @@ class AnalysisService:
             if not candidates:
                 return None
 
+            # FIXED: Lower threshold for hybrid similarity (paraphrases score 0.50-0.70)
+            # Hybrid combines multiple methods, so threshold should be lower than pure RapidFuzz
+            hybrid_threshold = 0.50  # Was: MEDIUM_SIMILARITY_THRESHOLD (0.75) - too high!
+
             match_result = self.hybrid_similarity_service.find_best_match(
                 query=text,
                 candidates=candidates,
-                min_score=self.MEDIUM_SIMILARITY_THRESHOLD
+                min_score=hybrid_threshold
             )
 
             if match_result:

@@ -80,6 +80,8 @@ app.add_middleware(
         "http://127.0.0.1:8081",
         "http://localhost:8082",
         "http://127.0.0.1:8082",
+        "http://localhost:8083",  # Added for current frontend instance
+        "http://127.0.0.1:8083",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -546,32 +548,33 @@ def _run_analysis_job(
 
         # Step 7: Analysis (simplified - no splitting)
         sections_to_use = policy_sections if use_conditions else []
-        advice_map: Dict[str, Any] = {}
 
-        total_clusters = len(clusters)
-        for idx, cluster in enumerate(clusters):
-            if idx % 10 == 0 and total_clusters:
-                progress_pct = 50 + int((idx / total_clusters) * 40)
-                _update_job(
-                    job,
-                    progress=progress_pct,
-                    message=f"🧠 Analyseren... ({idx}/{total_clusters})",
-                )
+        # Progress callback for analysis (50% -> 90%)
+        def analysis_progress(pct: int) -> None:
+            actual_progress = 50 + int(pct * 0.40)  # Map 0-100 to 50-90
+            _update_job(job, progress=actual_progress, message=f"🧠 Analyseren... ({pct}%)")
 
-            advice = analysis.analyze_clusters(
-                [cluster],
+        # FIXED: Analyze ALL clusters in a single call (was: per-cluster loop causing 989x re-initialization)
+        with Timer(f"Analyze {len(clusters)} clusters"):
+            advice_map = analysis.analyze_clusters(
+                clusters,
                 sections_to_use,
-                progress_callback=None,
-            ).get(cluster.id)
+                progress_callback=analysis_progress,
+            )
 
-            if not advice:
-                from hienfeld.domain.analysis import (  # local import to avoid cycles
-                    AdviceCode,
-                    AnalysisAdvice,
-                    ConfidenceLevel,
-                )
+        phase_timer.checkpoint(f"Analysis ({len(clusters)} clusters)")
 
-                advice = AnalysisAdvice(
+        # Validate all clusters have advice
+        from hienfeld.domain.analysis import (  # local import to avoid cycles
+            AdviceCode,
+            AnalysisAdvice,
+            ConfidenceLevel,
+        )
+
+        for cluster in clusters:
+            if cluster.id not in advice_map:
+                logger.warning(f"No advice generated for cluster {cluster.id}, creating fallback")
+                advice_map[cluster.id] = AnalysisAdvice(
                     cluster_id=cluster.id,
                     advice_code=AdviceCode.HANDMATIG_CHECKEN.value,
                     reason="Geen advies gegenereerd",
@@ -581,8 +584,6 @@ def _run_analysis_job(
                     cluster_name=cluster.name,
                     frequency=cluster.frequency,
                 )
-
-            advice_map[cluster.id] = advice
 
         # Step 8: Statistics
         _update_job(job, progress=95, message="📊 Resultaten samenstellen...")
@@ -846,6 +847,102 @@ async def download_report(job_id: str) -> StreamingResponse:
 async def healthcheck() -> Dict[str, str]:
     """Simple health endpoint for monitoring."""
     return {"status": "ok"}
+
+
+@app.post("/api/test-custom-instructions")
+def test_custom_instructions(
+    instructions_text: str = Form(...),
+    test_clause: str = Form(...)
+):
+    """
+    Test endpoint for debugging custom instructions matching.
+    
+    This endpoint allows you to test if custom instructions are being
+    parsed and matched correctly without running a full analysis.
+    
+    Args:
+        instructions_text: Raw custom instructions (TSV or arrow format)
+        test_clause: Sample clause text to test matching against
+        
+    Returns:
+        Detailed diagnostics about parsing and matching
+    """
+    try:
+        # Initialize services
+        base_similarity = RapidFuzzSimilarityService(threshold=0.65)
+        
+        # Create custom instructions service
+        custom_service = CustomInstructionsService(
+            fuzzy_service=base_similarity,
+            semantic_service=None,  # Not needed for basic testing
+            hybrid_service=None
+        )
+        
+        # Load instructions
+        loaded_count = custom_service.load_instructions(instructions_text)
+        
+        # Get loaded instructions
+        instructions_list = [
+            {
+                "search_text": instr.search_text,
+                "action": instr.action,
+                "original": instr.original_text
+            }
+            for instr in custom_service.instructions
+        ]
+        
+        # Test matching
+        match_result = custom_service.find_match(test_clause)
+        
+        # Build response
+        response = {
+            "success": True,
+            "input": {
+                "instructions_text": instructions_text,
+                "instructions_text_length": len(instructions_text),
+                "test_clause": test_clause,
+                "test_clause_length": len(test_clause)
+            },
+            "parsed": {
+                "count": loaded_count,
+                "instructions": instructions_list
+            },
+            "matching": {
+                "found_match": match_result is not None,
+                "match_details": None if match_result is None else {
+                    "search_text": match_result.instruction.search_text,
+                    "action": match_result.instruction.action,
+                    "score": match_result.score,
+                    "matched_text": match_result.matched_text[:100] + "..." if len(match_result.matched_text) > 100 else match_result.matched_text
+                }
+            },
+            "diagnostics": {
+                "contains_check": [],
+                "test_clause_normalized": test_clause.casefold()[:100] + "..." if len(test_clause) > 100 else test_clause.casefold()
+            }
+        }
+        
+        # Manual contains check for diagnostics
+        for instr in custom_service.instructions:
+            needle = instr.search_text.casefold()
+            haystack = test_clause.casefold()
+            found = needle in haystack
+            response["diagnostics"]["contains_check"].append({
+                "search_text": instr.search_text,
+                "search_text_normalized": needle,
+                "found_in_clause": found,
+                "explanation": f"'{needle}' {'IS' if found else 'NOT'} in '{haystack[:50]}...'"
+            })
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Test custom instructions error: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e),
+            "error_type": type(e).__name__
+        }
 
 
 # ---------------------------------------------------------------------------
