@@ -498,7 +498,11 @@ class ExportService:
             max_text_length = self.config.analysis_rules.max_text_length  # Default: 800
 
             # Identify long text rows (check if Reden mentions "te lang" or actual text length)
-            long_text_mask = df['Tekst'].str.len() > max_text_length
+            # FIXED: Check both text length AND reason to catch all long texts
+            long_text_mask = (
+                (df['Tekst'].str.len() > max_text_length) |
+                (df['Reden'].str.contains('te lang', case=False, na=False))
+            )
 
             # Split into two DataFrames
             long_texts_df = df[long_text_mask].copy()

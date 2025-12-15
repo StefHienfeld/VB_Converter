@@ -21,14 +21,14 @@ const MODES: ModeInfo[] = [
     label: "Fast",
     icon: Zap,
     description: "Snelle analyse met basis tekstmatching (RapidFuzz + Lemma)",
-    timeMultiplier: 0.05, // ~20x faster than balanced - seconds instead of minutes
+    timeMultiplier: 0.05, // ~20x faster than balanced - ~2s for 1660 rows
   },
   {
     value: "balanced",
     label: "Balanced",
     icon: Scale,
     description: "Optimale balans tussen snelheid en nauwkeurigheid",
-    timeMultiplier: 1.0, // Baseline - ~10 minutes for 1660 rows
+    timeMultiplier: 1.0, // Baseline - ~30 seconds for 1660 rows
     recommended: true,
   },
   {
@@ -36,7 +36,7 @@ const MODES: ModeInfo[] = [
     label: "Accurate",
     icon: Target,
     description: "Beste Nederlandse modellen voor maximale nauwkeurigheid",
-    timeMultiplier: 2.5, // ~2.5x slower than balanced - ~25 minutes for 1660 rows
+    timeMultiplier: 2.5, // ~2.5x slower than balanced - ~75 seconds for 1660 rows
   },
 ];
 
@@ -53,10 +53,10 @@ export function ModeSelector({ value, onChange, estimatedRows, className }: Mode
       return "";
     }
 
-    // Base time calibrated from empirical data:
-    // 1660 rows: Fast=4s, Balanced=~10min (600s), Accurate=~25min (1500s)
-    // Balanced base: 600s / 1660 rows = 0.36s per row
-    const baseTimePerRow = 0.36;
+    // Base time calibrated from empirical data (updated for optimized models):
+    // 1660 rows: Fast=~2s, Balanced=~30s, Accurate=~75s
+    // Balanced base: 30s / 1660 rows = 0.018s per row
+    const baseTimePerRow = 0.018;
     const totalSeconds = estimatedRows * baseTimePerRow * mode.timeMultiplier;
 
     if (totalSeconds < 60) {
