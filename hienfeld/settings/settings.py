@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     environment: Environment = Environment.DEVELOPMENT
     debug: bool = True
 
+    # === Security ===
+    # SECRET_KEY is required for production. Generate with: openssl rand -hex 32
+    secret_key: str = "dev-only-change-in-production-openssl-rand-hex-32"
+
     # === Server ===
     api_host: str = "0.0.0.0"
     api_port: int = 8000
