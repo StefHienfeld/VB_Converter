@@ -17,18 +17,26 @@ Run locally (example):
 
 from __future__ import annotations
 
-import base64
 import uuid
-from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 
 from hienfeld.config import load_config
+
+# Import models from new MVC structure
+from hienfeld_api.models import (
+    AnalysisJob,
+    JobStatus,
+    StartAnalysisResponse,
+    JobStatusResponse,
+    AnalysisResultRowModel,
+    AnalysisResultsResponse,
+    UploadPreviewResponse,
+)
+from hienfeld_api.repositories import MemoryJobRepository
 from hienfeld.domain.policy_document import PolicyDocumentSection
 from hienfeld.logging_config import get_logger, setup_logging, log_section
 from hienfeld.utils.timing import PhaseTimer, Timer
@@ -90,98 +98,10 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# Internal job model
+# Job storage (Repository pattern)
 # ---------------------------------------------------------------------------
 
-
-class JobStatus(str):
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-@dataclass
-class AnalysisJob:
-    id: str
-    status: str = JobStatus.PENDING
-    progress: int = 0
-    status_message: str = ""
-    error: Optional[str] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
-
-    stats: Optional[Dict[str, Any]] = None
-    results: Optional[List[Dict[str, Any]]] = None
-    excel_bytes: Optional[bytes] = None
-    excel_filename: Optional[str] = None
-
-
-JOBS: Dict[str, AnalysisJob] = {}
-
-
-def _update_job(
-    job: AnalysisJob,
-    *,
-    status: Optional[str] = None,
-    progress: Optional[int] = None,
-    message: Optional[str] = None,
-    error: Optional[str] = None,
-) -> None:
-    """Helper to update a job safely."""
-    if status is not None:
-        job.status = status
-    if progress is not None:
-        job.progress = int(progress)
-    if message is not None:
-        job.status_message = message
-    if error is not None:
-        job.error = error
-
-
-# ---------------------------------------------------------------------------
-# Pydantic models for responses
-# ---------------------------------------------------------------------------
-
-
-class StartAnalysisResponse(BaseModel):
-    job_id: str
-    status: str
-
-
-class JobStatusResponse(BaseModel):
-    job_id: str
-    status: str
-    progress: int
-    status_message: str
-    error: Optional[str] = None
-    stats: Optional[Dict[str, Any]] = None
-
-
-class AnalysisResultRowModel(BaseModel):
-    cluster_id: str
-    cluster_name: str
-    frequency: int
-    advice_code: str
-    confidence: str
-    reason: str
-    reference_article: str
-    original_text: str
-    row_type: str
-    parent_id: Optional[str] = None
-
-
-class AnalysisResultsResponse(BaseModel):
-    job_id: str
-    status: str
-    stats: Optional[Dict[str, Any]]
-    results: List[AnalysisResultRowModel]
-
-
-class UploadPreviewResponse(BaseModel):
-    columns: List[str]
-    row_count: int
-    text_column: str
-    policy_column: Optional[str]
+job_repository = MemoryJobRepository()
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +123,7 @@ def _run_analysis_job(
     This mirrors the logic in `HienfeldState.run_analysis`, but operates
     without Reflex state and writes progress into the in-memory job.
     """
-    job = JOBS.get(job_id)
+    job = job_repository.get(job_id)
     if not job:
         logger.error(f"Job {job_id} not found when starting analysis")
         return
@@ -212,7 +132,7 @@ def _run_analysis_job(
     phase_timer = PhaseTimer(f"Analysis Job {job_id[:8]}")
 
     try:
-        _update_job(job, status=JobStatus.RUNNING, progress=0, message="Initialiseren...")
+        job.update( status=JobStatus.RUNNING, progress=0, message="Initialiseren...")
 
         log_section(logger, f"🚀 NEW ANALYSIS JOB: {job_id}")
 
@@ -296,7 +216,7 @@ def _run_analysis_job(
         hybrid_service = None
 
         # Step 1: Load policy file
-        _update_job(job, progress=5, message="📄 Bestand inlezen...")
+        job.update( progress=5, message="📄 Bestand inlezen...")
         logger.info(f"📄 Loading policy file: {policy_filename} ({len(policy_bytes)} bytes)")
 
         with Timer("Load policy file"):
@@ -310,7 +230,7 @@ def _run_analysis_job(
         # Step 2: Parse conditions (if enabled)
         policy_sections: List[PolicyDocumentSection] = []
         if use_conditions and conditions_files:
-            _update_job(job, progress=10, message="📚 Voorwaarden verwerken...")
+            job.update( progress=10, message="📚 Voorwaarden verwerken...")
             logger.info(f"📚 Parsing {len(conditions_files)} conditions files...")
 
             with Timer(f"Parse {len(conditions_files)} conditions files"):
@@ -326,7 +246,7 @@ def _run_analysis_job(
             logger.info(f"✅ Conditions parsed: {len(policy_sections)} total sections")
             phase_timer.checkpoint(f"Conditions parsed ({len(policy_sections)} sections)")
         else:
-            _update_job(job, progress=10, message="📊 Modus: Interne analyse")
+            job.update( progress=10, message="📊 Modus: Interne analyse")
             logger.info("ℹ️  No conditions files - internal analysis mode")
             phase_timer.checkpoint("No conditions (internal mode)")
 
@@ -339,7 +259,7 @@ def _run_analysis_job(
         if use_semantic and config.semantic.enabled:
             # Train TF-IDF on voorwaarden (if available and we have conditions)
             if policy_sections and tfidf_service.is_available and config.semantic.enable_tfidf:
-                _update_job(job, progress=12, message="🔤 TF-IDF model trainen...")
+                job.update( progress=12, message="🔤 TF-IDF model trainen...")
                 logger.info("🔤 Training TF-IDF model...")
 
                 with Timer("TF-IDF training"):
@@ -354,7 +274,7 @@ def _run_analysis_job(
 
             # Embeddings + vector store (for clustering similarity) - cached
             if config.semantic.enable_embeddings:
-                _update_job(job, progress=14, message="🧠 Embeddings laden...")
+                job.update( progress=14, message="🧠 Embeddings laden...")
                 try:
                     cache = get_service_cache()
 
@@ -369,12 +289,12 @@ def _run_analysis_job(
 
                     logger.info(f"✅ Embeddings service loaded (model: {config.semantic.embedding_model}, cached)")
 
-                    _update_job(job, progress=16, message="📊 Vector store initialiseren...")
+                    job.update( progress=16, message="📊 Vector store initialiseren...")
                     vector_store = create_vector_store(
                         method=config.ai.vector_store_type or "faiss",
                         embedding_dim=getattr(embeddings_service, "embedding_dim", 384),
                     )
-                    _update_job(job, progress=18, message="🔍 RAG index bouwen...")
+                    job.update( progress=18, message="🔍 RAG index bouwen...")
                     rag_service = RAGService(embeddings_service, vector_store)
                     rag_service.index_policy_sections(policy_sections)
                     logger.info("✅ RAG index opgebouwd voor semantische context")
@@ -422,7 +342,7 @@ def _run_analysis_job(
 
         # Initialize hybrid similarity service (v3.0 semantic enhancement)
         if HYBRID_AVAILABLE and config.semantic.enabled and use_semantic:
-            _update_job(job, progress=20, message="⚡ Hybrid similarity configureren...")
+            job.update( progress=20, message="⚡ Hybrid similarity configureren...")
             try:
                 # Get active mode configuration
                 mode_config = config.semantic.get_active_config()
@@ -512,12 +432,12 @@ def _run_analysis_job(
 
         # Step 3: Load clause library if available
         if clause_library_files:
-            _update_job(job, progress=21, message="📚 Clausulebibliotheek laden...")
+            job.update( progress=21, message="📚 Clausulebibliotheek laden...")
             clause_library_service.load_from_files(clause_library_files)
             analysis.set_clause_library_service(clause_library_service)
 
         # Step 4: Convert to clauses
-        _update_job(job, progress=23, message="📄 Data voorbereiden...")
+        job.update( progress=23, message="📄 Data voorbereiden...")
         clauses = preprocessing.dataframe_to_clauses(
             df,
             text_col,
@@ -526,13 +446,13 @@ def _run_analysis_job(
         )
 
         # Step 5: Clustering (multi-clause detection removed - now handled by length check)
-        _update_job(job, progress=25, message="🔗 Slim clusteren...")
+        job.update( progress=25, message="🔗 Slim clusteren...")
         log_section(logger, f"🔗 CLUSTERING ({len(clauses)} clauses)")
 
         # Progress callback for clustering (25% -> 50%)
         def clustering_progress(pct: int) -> None:
             actual_progress = 25 + int(pct * 0.25)  # Map 0-100 to 25-50
-            _update_job(job, progress=actual_progress, message=f"🔗 Slim clusteren... ({pct}%)")
+            job.update( progress=actual_progress, message=f"🔗 Slim clusteren... ({pct}%)")
 
         with Timer(f"Cluster {len(clauses)} clauses"):
             clusters, clause_to_cluster = clustering.cluster_clauses(clauses, progress_callback=clustering_progress)
@@ -544,7 +464,7 @@ def _run_analysis_job(
         for clause in clauses:
             clause.cluster_id = clause_to_cluster.get(clause.id)
 
-        _update_job(job, progress=50, message="🧠 Analyseren...")
+        job.update( progress=50, message="🧠 Analyseren...")
 
         # Step 7: Analysis (simplified - no splitting)
         sections_to_use = policy_sections if use_conditions else []
@@ -552,7 +472,7 @@ def _run_analysis_job(
         # Progress callback for analysis (50% -> 90%)
         def analysis_progress(pct: int) -> None:
             actual_progress = 50 + int(pct * 0.40)  # Map 0-100 to 50-90
-            _update_job(job, progress=actual_progress, message=f"🧠 Analyseren... ({pct}%)")
+            job.update( progress=actual_progress, message=f"🧠 Analyseren... ({pct}%)")
 
         # FIXED: Analyze ALL clusters in a single call (was: per-cluster loop causing 989x re-initialization)
         with Timer(f"Analyze {len(clusters)} clusters"):
@@ -586,7 +506,7 @@ def _run_analysis_job(
                 )
 
         # Step 8: Statistics
-        _update_job(job, progress=95, message="📊 Resultaten samenstellen...")
+        job.update( progress=95, message="📊 Resultaten samenstellen...")
         stats = export.get_statistics_summary(clauses, clusters, advice_map)
         stats["analysis_mode"] = (
             "with_conditions" if (use_conditions and policy_sections) else "internal_only"
@@ -644,8 +564,7 @@ def _run_analysis_job(
         job.excel_bytes = excel_bytes
         job.excel_filename = "Hienfeld_Analyse.xlsx"
 
-        _update_job(
-            job,
+        job.update(
             status=JobStatus.COMPLETED,
             progress=100,
             message="✅ Analyse voltooid!",
@@ -661,8 +580,7 @@ def _run_analysis_job(
         logger.info("=" * 80)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Analysis job %s failed: %s", job_id, exc)
-        _update_job(
-            job,
+        job.update(
             status=JobStatus.FAILED,
             progress=0,
             message="❌ Analyse mislukt",
@@ -741,7 +659,7 @@ async def start_analysis(
 
     job_id = str(uuid.uuid4())
     job = AnalysisJob(id=job_id)
-    JOBS[job_id] = job
+    job_repository.save(job)
 
     settings = {
         "cluster_accuracy": cluster_accuracy,
@@ -776,7 +694,7 @@ async def start_analysis(
 @app.get("/api/status/{job_id}", response_model=JobStatusResponse)
 async def get_status(job_id: str) -> JobStatusResponse:
     """Return status/progress for a given analysis job."""
-    job = JOBS.get(job_id)
+    job = job_repository.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job niet gevonden")
 
@@ -798,7 +716,7 @@ async def get_results(job_id: str) -> AnalysisResultsResponse:
 
     If the job has not completed yet, returns HTTP 202.
     """
-    job = JOBS.get(job_id)
+    job = job_repository.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job niet gevonden")
 
@@ -825,7 +743,7 @@ async def download_report(job_id: str) -> StreamingResponse:
     """
     Download the Excel rapport for a completed job.
     """
-    job = JOBS.get(job_id)
+    job = job_repository.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job niet gevonden")
 
