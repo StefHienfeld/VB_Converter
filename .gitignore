@@ -1,9 +1,14 @@
-<<<<<<< HEAD
-.states
-*.db
-.web
-assets/external/
 # Hienfeld VB Converter - Git Ignore
+
+# ======================
+# Reflex / Build Output
+# ======================
+.states/
+.web/
+*.db
+assets/external/
+uploaded_files/
+.claude/
 
 # ======================
 # Python
