@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from hienfeld.config import load_config
+from hienfeld.settings import get_settings
 
 # Import models from new MVC structure
 from hienfeld_api.models import (
@@ -37,6 +38,8 @@ from hienfeld_api.models import (
     UploadPreviewResponse,
 )
 from hienfeld_api.repositories import MemoryJobRepository
+from hienfeld_api.middleware import setup_security
+from hienfeld_api.routes import health_router
 from hienfeld.domain.policy_document import PolicyDocumentSection
 from hienfeld.logging_config import get_logger, setup_logging, log_section
 from hienfeld.utils.timing import PhaseTimer, Timer
@@ -72,29 +75,30 @@ except ImportError:
     HYBRID_AVAILABLE = False
     logger.info("Hybrid similarity service not available (install spacy, gensim, wn)")
 
-app = FastAPI(title="Hienfeld VB Converter API", version="1.0.0")
+# Load environment settings
+settings = get_settings()
 
-# CORS so the Vite frontend (http://localhost:5173 by default) can call the API.
+app = FastAPI(
+    title="Hienfeld VB Converter API",
+    version=settings.app_version,
+    docs_url="/docs" if settings.debug else None,
+    redoc_url="/redoc" if settings.debug else None,
+)
+
+# CORS - origins loaded from environment variable ALLOWED_ORIGINS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
-        "http://localhost:8081",
-        "http://127.0.0.1:8081",
-        "http://localhost:8082",
-        "http://127.0.0.1:8082",
-        "http://localhost:8083",  # Added for current frontend instance
-        "http://127.0.0.1:8083",
-    ],
+    allow_origins=settings.get_allowed_origins_list(),
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
+
+# Security middleware (headers, logging, rate limiting)
+setup_security(app)
+
+# Health check routes (for Docker/K8s)
+app.include_router(health_router, prefix="/api")
 
 
 # ---------------------------------------------------------------------------

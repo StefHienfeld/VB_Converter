@@ -1,0 +1,65 @@
+version: '3.8'
+
+# =============================================================================
+# VB_CONVERTER - PRODUCTION DOCKER COMPOSE
+# =============================================================================
+# Usage:
+#   cd infrastructure/docker
+#   docker-compose -f docker-compose.prod.yml up -d
+#
+# Environment variables required:
+#   - ALLOWED_ORIGINS: Comma-separated list of allowed CORS origins
+# =============================================================================
+
+services:
+  backend:
+    image: ${REGISTRY:-ghcr.io}/stefhienfeld/vb-converter-backend:${TAG:-latest}
+    container_name: vb-converter-backend
+    restart: always
+    environment:
+      - ENVIRONMENT=production
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+      - LOG_FORMAT=json
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost}
+      - RATE_LIMIT_ENABLED=true
+      - RATE_LIMIT_REQUESTS=100
+      - RATE_LIMIT_WINDOW=60
+    volumes:
+      - upload_data:/app/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - vb-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+  frontend:
+    image: ${REGISTRY:-ghcr.io}/stefhienfeld/vb-converter-frontend:${TAG:-latest}
+    container_name: vb-converter-frontend
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - vb-network
+
+volumes:
+  upload_data:
+    driver: local
+
+networks:
+  vb-network:
+    driver: bridge

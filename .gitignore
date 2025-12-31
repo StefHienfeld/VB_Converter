@@ -70,6 +70,7 @@ env/
 # Text data files
 *.txt
 !requirements.txt
+!requirements-dev.txt
 !README.txt
 
 # ======================
@@ -143,3 +144,19 @@ dist-ssr/
 *.njsproj
 *.sln
 *.sw?
+
+# ======================
+# Docker
+# ======================
+docker-compose.override.yml
+.docker/
+
+# ======================
+# Test / Coverage
+# ======================
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+coverage.xml
+*.cover

@@ -1,0 +1,67 @@
+version: '3.8'
+
+# =============================================================================
+# VB_CONVERTER - DEVELOPMENT DOCKER COMPOSE
+# =============================================================================
+# Usage:
+#   cd infrastructure/docker
+#   docker-compose up -d
+#   docker-compose logs -f
+# =============================================================================
+
+services:
+  backend:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.backend
+      target: production
+    container_name: vb-converter-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+      - LOG_FORMAT=text
+      - ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000,http://localhost:80
+      - RATE_LIMIT_ENABLED=false
+    volumes:
+      # Mount source for hot reload in development
+      - ../../hienfeld:/app/hienfeld:ro
+      - ../../hienfeld_api:/app/hienfeld_api:ro
+      - upload_data:/app/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - vb-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.frontend
+      args:
+        - VITE_ENVIRONMENT=development
+        - VITE_API_URL=http://localhost:8000
+        - VITE_APP_VERSION=3.1.0
+    container_name: vb-converter-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - vb-network
+    restart: unless-stopped
+
+volumes:
+  upload_data:
+    driver: local
+
+networks:
+  vb-network:
+    driver: bridge

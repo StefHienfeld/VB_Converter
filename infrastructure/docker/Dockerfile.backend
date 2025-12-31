@@ -1,0 +1,75 @@
+# =============================================================================
+# VB_CONVERTER BACKEND - MULTI-STAGE PRODUCTION BUILD
+# =============================================================================
+
+# --- Stage 1: Base ---
+FROM python:3.11-slim-bookworm AS base
+
+# Security: non-root user
+RUN groupadd --gid 1000 appgroup && \
+    useradd --uid 1000 --gid appgroup --shell /bin/bash --create-home appuser
+
+# System dependencies for NLP libraries
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        build-essential \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+# --- Stage 2: Dependencies ---
+FROM base AS dependencies
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Download SpaCy Dutch model
+RUN python -m spacy download nl_core_news_md
+
+# Pre-download sentence transformer model (optional, improves cold start)
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')" || true
+
+# --- Stage 3: Production ---
+FROM base AS production
+
+# Copy dependencies from builder
+COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=dependencies /usr/local/bin /usr/local/bin
+
+# Copy SpaCy model data
+COPY --from=dependencies /root/.cache /home/appuser/.cache
+RUN chown -R appuser:appgroup /home/appuser/.cache || true
+
+# Copy application code
+COPY --chown=appuser:appgroup hienfeld/ ./hienfeld/
+COPY --chown=appuser:appgroup hienfeld_api/ ./hienfeld_api/
+
+# Create uploads directory
+RUN mkdir -p /app/uploads && chown appuser:appgroup /app/uploads
+
+# Switch to non-root user
+USER appuser
+
+# Environment defaults (can be overridden)
+ENV ENVIRONMENT=production \
+    DEBUG=false \
+    API_HOST=0.0.0.0 \
+    API_PORT=8000 \
+    LOG_LEVEL=INFO \
+    LOG_FORMAT=json
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:${API_PORT:-8000}/api/health || exit 1
+
+EXPOSE ${API_PORT:-8000}
+
+CMD ["uvicorn", "hienfeld_api.app:app", "--host", "0.0.0.0", "--port", "8000"]

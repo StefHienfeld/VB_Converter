@@ -345,3 +345,84 @@ npm run dev  # http://localhost:5173
 ```
 
 De React-frontend praat tegen de Python-backend via `http://localhost:8000/api/...`.
+
+---
+
+## 🐳 Docker Deployment
+
+### Snel starten met Docker Compose
+
+```bash
+# Development mode (hot-reload)
+cd infrastructure/docker
+docker-compose up -d
+
+# Production mode
+docker-compose -f docker-compose.prod.yml up -d
+```
+
+Toegang:
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:8000
+- Health check: http://localhost:8000/api/health
+
+### Individuele images bouwen
+
+```bash
+# Backend
+docker build -f infrastructure/docker/Dockerfile.backend -t vb-converter-backend .
+
+# Frontend
+docker build -f infrastructure/docker/Dockerfile.frontend -t vb-converter-frontend .
+```
+
+### Environment variabelen
+
+Kopieer `environments/.env.example` naar `.env` en pas aan:
+
+```bash
+# Essentieel
+ENVIRONMENT=production
+DEBUG=false
+ALLOWED_ORIGINS=https://jouw-domein.nl
+
+# Optioneel
+SPACY_MODEL=nl_core_news_md
+RATE_LIMIT_REQUESTS=100
+RATE_LIMIT_WINDOW=60
+```
+
+Zie [docs/RUNBOOK.md](docs/RUNBOOK.md) voor uitgebreide operations documentatie.
+
+---
+
+## 🔄 CI/CD Pipeline
+
+GitHub Actions workflows in `.github/workflows/`:
+
+| Workflow | Trigger | Actie |
+|----------|---------|-------|
+| `ci.yml` | Push/PR | Lint, test, security scan, build images |
+| `release.yml` | Tag v*.*.* | Build & push production images naar GHCR |
+
+### Images ophalen
+
+```bash
+docker pull ghcr.io/hienfeld/vb-converter-backend:latest
+docker pull ghcr.io/hienfeld/vb-converter-frontend:latest
+```
+
+---
+
+## 🧪 Tests draaien
+
+```bash
+# Install dev dependencies
+pip install -r requirements-dev.txt
+
+# Run tests
+pytest
+
+# Met coverage
+pytest --cov=hienfeld --cov=hienfeld_api --cov-report=html
+```
