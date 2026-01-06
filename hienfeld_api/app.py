@@ -17,6 +17,7 @@ Run locally (example):
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -67,6 +68,17 @@ from hienfeld.services.reference_analysis_service import ReferenceAnalysisServic
 
 setup_logging()
 logger = get_logger("api")
+
+# Integrate with uvicorn's logging so all logs appear in terminal
+try:
+    uvicorn_logger = logging.getLogger("uvicorn")
+    # Share handlers with uvicorn so logs appear in same output
+    if uvicorn_logger.handlers:
+        logger.handlers = uvicorn_logger.handlers
+        logger.setLevel(uvicorn_logger.level or logging.INFO)
+except Exception:
+    # If uvicorn logger not available, continue with default logging
+    pass
 
 # Semantic enhancement services (v3.0 - optional)
 try:
@@ -450,11 +462,13 @@ def _run_analysis_job(
                     config=config,
                     similarity_service=hybrid_service or base_similarity_service,
                 )
-                ref_count = reference_service.load_reference_file(ref_bytes, ref_filename)
+                # FIX: load_reference_file returns ReferenceData object, not int
+                ref_data = reference_service.load_reference_file(ref_bytes, ref_filename)
+                ref_count = len(ref_data.clauses) if ref_data else 0
                 logger.info(f"✅ Reference analysis loaded: {ref_count} clausules uit {ref_filename}")
                 phase_timer.checkpoint(f"Reference loaded ({ref_count} clauses)")
             except Exception as e:
-                logger.warning(f"⚠️ Could not load reference file: {e}")
+                logger.error(f"❌ Could not load reference file: {e}", exc_info=True)
                 reference_service = None
 
         analysis = AnalysisService(
@@ -589,12 +603,22 @@ def _run_analysis_job(
         gone_texts = None
         if reference_service:
             reference_matches = {}
-            for cluster in clusters:
-                # Use simplified text from leader for matching
-                leader_text = cluster.leader.simplified_text if cluster.leader else cluster.leader_text
+            total_clusters = len(clusters)
+            for idx, cluster in enumerate(clusters):
+                # Progress update every 10% to prevent UI hanging
+                if idx % max(1, total_clusters // 10) == 0:
+                    pct = 95 + int((idx / max(1, total_clusters)) * 4)  # 95% -> 99%
+                    job.update(progress=pct, message=f"📊 Reference vergelijking... ({idx}/{total_clusters})")
+
+                # FIX: Use leader_clause (not leader) - cluster.leader doesn't exist!
+                leader_text = cluster.leader_clause.simplified_text if cluster.leader_clause else cluster.leader_text
+
+                # FIX: Normalize key to match export_service lookup (line 96: clause.simplified_text.lower().strip())
+                normalized_key = leader_text.lower().strip() if leader_text else ""
+
                 ref_match = reference_service.find_match(leader_text)
-                if ref_match:
-                    reference_matches[cluster.id] = ref_match
+                if ref_match and normalized_key:
+                    reference_matches[normalized_key] = ref_match
 
             # Get texts from reference that weren't matched (disappeared from current data)
             gone_texts = reference_service.get_gone_texts()

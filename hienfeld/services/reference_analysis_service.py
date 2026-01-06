@@ -8,6 +8,7 @@ Enables comparison between current (monthly) analysis and a previous
 from typing import Optional, List, Dict, Tuple
 from io import BytesIO
 import pandas as pd
+from rapidfuzz import process, fuzz
 
 from ..config import AppConfig
 from ..domain.reference import (
@@ -71,6 +72,8 @@ class ReferenceAnalysisService:
 
         self._reference_data: Optional[ReferenceData] = None
         self._match_cache: Dict[str, Optional[ReferenceMatch]] = {}
+        self._fuzzy_choices: Optional[Dict[str, ReferenceClause]] = None
+        self._fuzzy_choices_list: Optional[List[str]] = None  # FIX: Cache the list too
 
     @property
     def is_loaded(self) -> bool:
@@ -172,8 +175,10 @@ class ReferenceAnalysisService:
             )
             self._reference_data.build_indexes()
 
-            # Clear match cache
+            # Clear caches
             self._match_cache = {}
+            self._fuzzy_choices = None  # Will be rebuilt on first find_match call
+            self._fuzzy_choices_list = None  # FIX: Also clear the cached list
 
             logger.info(
                 f"Reference loaded: {len(clauses)} unique texts from {len(df)} rows"
@@ -225,44 +230,37 @@ class ReferenceAnalysisService:
             self._match_cache[simplified] = result
             return result
 
-        # TIER 2: Fuzzy match (O(n))
-        best_match: Optional[Tuple[float, ReferenceClause]] = None
+        # TIER 2: Fast fuzzy match using RapidFuzz extractOne (optimized C implementation)
+        # Build choices dict for fast lookup: {simplified_text: clause}
+        if self._fuzzy_choices is None:
+            self._fuzzy_choices = {c.simplified_text: c for c in self._reference_data.clauses}
+            # FIX: Cache the list once instead of creating it every call (was O(n) overhead per call!)
+            self._fuzzy_choices_list = list(self._fuzzy_choices.keys())
 
-        for ref_clause in self._reference_data.clauses:
-            if ref_clause.is_matched:
-                continue  # Skip already matched
-
-            score = self.similarity_service.compute_similarity(
-                simplified, ref_clause.simplified_text
+        # Use RapidFuzz's extractOne - much faster than manual iteration
+        # FIX: Use cached list instead of creating new list each call
+        if self._fuzzy_choices_list:
+            match_result = process.extractOne(
+                simplified,
+                self._fuzzy_choices_list,
+                scorer=fuzz.ratio,
+                score_cutoff=min_score * 100  # RapidFuzz uses 0-100 scale
             )
 
-            if score >= min_score:
-                if best_match is None or score > best_match[0]:
-                    best_match = (score, ref_clause)
+            if match_result:
+                matched_text, score, _ = match_result
+                ref_clause = self._fuzzy_choices[matched_text]
 
-        if best_match and best_match[0] >= min_score:
-            best_match[1].mark_matched()
-            result = ReferenceMatch(
-                reference_clause=best_match[1],
-                match_type="fuzzy",
-                match_score=best_match[0],
-            )
-            self._match_cache[simplified] = result
-            return result
+                # FIX: Mark as matched for gone_texts tracking, but ALWAYS return the match!
+                # Previous bug: if is_matched was True, returned None instead of match
+                if not ref_clause.is_matched:
+                    ref_clause.mark_matched()
 
-        # TIER 3: Semantic match (expensive, only for borderline)
-        if self.hybrid_similarity_service and best_match and best_match[0] >= 0.75:
-            # Try semantic matching for borderline cases
-            semantic_score = self.hybrid_similarity_service.compute_similarity(
-                simplified, best_match[1].simplified_text
-            )
-
-            if semantic_score >= 0.85:
-                best_match[1].mark_matched()
+                # Always create and cache the result (even if ref_clause was already matched)
                 result = ReferenceMatch(
-                    reference_clause=best_match[1],
-                    match_type="semantic",
-                    match_score=semantic_score,
+                    reference_clause=ref_clause,
+                    match_type="fuzzy",
+                    match_score=score / 100.0,  # Convert back to 0-1 scale
                 )
                 self._match_cache[simplified] = result
                 return result
