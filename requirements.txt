@@ -1,13 +1,11 @@
-"""
-Hienfeld VB Converter - Backend Requirements
-
-Core:
-- Analysis pipeline (hienfeld/)
-- FastAPI REST API (hienfeld_api/)
-
-The original Reflex UI is still supported for now, but the React/Vite
-frontend is the primary UI going forward.
-"""
+# Hienfeld VB Converter - Backend Requirements
+#
+# Core:
+# - Analysis pipeline (hienfeld/)
+# - FastAPI REST API (hienfeld_api/)
+#
+# The original Reflex UI is still supported for now, but the React/Vite
+# frontend is the primary UI going forward.
 
 # -------------------------
 # Web / API
@@ -59,12 +57,6 @@ faiss-cpu>=1.7.4
 openai>=1.0.0
 
 # -------------------------
-# Optional extras
+# Rate limiting
 # -------------------------
-
-# Near-duplicate detection (alternative to fuzzy matching)
-# datasketch>=1.6.0
-
-# Encoding detection (auto-detect file encodings)
-# chardet>=5.0.0
 slowapi
