@@ -1,0 +1,54 @@
+# Hienfeld VB Converter - Docker/Production Requirements
+#
+# Excludes:
+# - reflex (React frontend is primary UI)
+# - pywin32 (Windows only)
+
+# -------------------------
+# Web / API
+# -------------------------
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic-settings>=2.0.0
+
+# -------------------------
+# Data processing
+# -------------------------
+pandas>=2.0.0
+openpyxl>=3.1.0
+xlsxwriter>=3.1.0
+
+# -------------------------
+# Document parsing
+# -------------------------
+python-docx>=0.8.11
+PyMuPDF>=1.23.0
+pdfplumber>=0.10.0
+
+# -------------------------
+# Fast string matching
+# -------------------------
+rapidfuzz>=3.0.0
+
+# -------------------------
+# NLP & Semantic Analysis (local, no API required)
+# -------------------------
+spacy>=3.7.0
+gensim>=4.3.0
+wn>=0.9.0
+
+# -------------------------
+# Sentence Embeddings (local)
+# -------------------------
+sentence-transformers>=2.2.0
+faiss-cpu>=1.7.4
+
+# -------------------------
+# AI / LLM (optional - requires API keys)
+# -------------------------
+openai>=1.0.0
+
+# -------------------------
+# Rate limiting
+# -------------------------
+slowapi

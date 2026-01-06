@@ -28,8 +28,9 @@ WORKDIR /app
 # --- Stage 2: Dependencies ---
 FROM base AS dependencies
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Use Docker-specific requirements (excludes reflex, pywin32)
+COPY requirements-docker.txt .
+RUN pip install --no-cache-dir -r requirements-docker.txt
 
 # Download SpaCy Dutch model
 RUN python -m spacy download nl_core_news_md

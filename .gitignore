@@ -71,6 +71,7 @@ env/
 *.txt
 !requirements.txt
 !requirements-dev.txt
+!requirements-docker.txt
 !README.txt
 
 # ======================
