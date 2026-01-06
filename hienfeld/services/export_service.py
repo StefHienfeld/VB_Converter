@@ -10,6 +10,13 @@ from ..config import AppConfig
 from ..domain.clause import Clause
 from ..domain.cluster import Cluster
 from ..domain.analysis import AnalysisAdvice
+from ..domain.reference import (
+    ReferenceClause,
+    ReferenceMatch,
+    ComparisonStatus,
+    get_comparison_status,
+    get_comparison_symbol,
+)
 from ..logging_config import get_logger
 
 logger = get_logger('export_service')
@@ -36,11 +43,12 @@ class ExportService:
         advice_map: Dict[str, AnalysisAdvice],
         include_original_columns: bool = True,
         original_df: Optional[pd.DataFrame] = None,
-        hierarchical_results: Optional[List[Dict]] = None
+        hierarchical_results: Optional[List[Dict]] = None,
+        reference_matches: Optional[Dict[str, ReferenceMatch]] = None
     ) -> pd.DataFrame:
         """
         Build a DataFrame with analysis results, supporting hierarchical parent/child structure.
-        
+
         Args:
             clauses: List of analyzed Clause objects (legacy, may be empty if using hierarchical_results)
             clusters: List of Cluster objects
@@ -48,7 +56,8 @@ class ExportService:
             include_original_columns: Whether to include original data columns
             original_df: Original DataFrame (for preserving columns)
             hierarchical_results: Optional list of hierarchical result dicts with 'type' ('PARENT', 'CHILD', 'SINGLE')
-            
+            reference_matches: Optional mapping of simplified_text -> ReferenceMatch for comparison
+
         Returns:
             DataFrame with analysis results
         """
@@ -81,8 +90,15 @@ class ExportService:
             cluster = cluster_lookup.get(cluster_id)
             advice = advice_map.get(cluster_id)
             
+            # Get reference match for this clause (if available)
+            ref_match = None
+            if reference_matches:
+                simplified = clause.simplified_text.lower().strip() if clause.simplified_text else ""
+                ref_match = reference_matches.get(simplified)
+
+            # Build row with standard columns
             row = {
-                # NEW: Status kolom (leeg) voor collega's tracking
+                # Status kolom (leeg) voor collega's tracking
                 'Status': '',
                 'Cluster_ID': cluster_id,
                 'Cluster_Naam': cluster.name if cluster else '',
@@ -91,8 +107,19 @@ class ExportService:
                 'Reden': advice.reason if advice else '',
                 'Artikel': advice.reference_article if advice else '',
                 'Frequentie': cluster.frequency if cluster else 0,
-                'Tekst': clause.raw_text,
             }
+
+            # Add reference columns (if reference analysis was used)
+            if reference_matches is not None:
+                current_advice = advice.advice_code if advice else ""
+                comparison_status = get_comparison_status(current_advice, ref_match)
+
+                row['Ref. Frequentie'] = ref_match.reference_clause.frequency if ref_match else ''
+                row['Ref. Advies'] = ref_match.reference_clause.advice_code if ref_match else ''
+                row['Vergelijking'] = get_comparison_symbol(comparison_status)
+
+            # Add text column
+            row['Tekst'] = clause.raw_text
             
             # Add policy number if available
             if clause.source_policy_number:
@@ -477,7 +504,8 @@ class ExportService:
         df: pd.DataFrame,
         include_summary: bool = False,
         clusters: Optional[List[Cluster]] = None,
-        advice_map: Optional[Dict[str, AnalysisAdvice]] = None
+        advice_map: Optional[Dict[str, AnalysisAdvice]] = None,
+        gone_texts: Optional[List[ReferenceClause]] = None
     ) -> bytes:
         """
         Export DataFrame to Excel bytes.
@@ -487,6 +515,7 @@ class ExportService:
             include_summary: Whether to include a summary sheet
             clusters: Clusters for summary (required if include_summary=True)
             advice_map: Advice map for summary (required if include_summary=True)
+            gone_texts: List of reference clauses not found in current data (verdwenen teksten)
 
         Returns:
             Excel file as bytes
@@ -524,8 +553,45 @@ class ExportService:
                 summary_df = self.build_cluster_summary(clusters, advice_map)
                 summary_df.to_excel(writer, sheet_name='Cluster Samenvatting', index=False)
 
+            # Verdwenen Teksten sheet (texts in reference but not in current)
+            if gone_texts:
+                gone_df = self._build_gone_texts_dataframe(gone_texts)
+                gone_df.to_excel(writer, sheet_name='Verdwenen Teksten', index=False)
+                logger.info(f"Verdwenen Teksten sheet: {len(gone_texts)} rows")
+
         logger.info("Generated Excel file")
         return output.getvalue()
+
+    def _build_gone_texts_dataframe(
+        self,
+        gone_texts: List[ReferenceClause]
+    ) -> pd.DataFrame:
+        """
+        Build DataFrame for "Verdwenen Teksten" sheet.
+
+        These are texts that existed in the reference analysis but
+        are not present in the current data (possibly due to policy
+        cancellations, mutations, or text changes).
+
+        Args:
+            gone_texts: List of unmatched reference clauses
+
+        Returns:
+            DataFrame with gone text information
+        """
+        rows = []
+        for clause in gone_texts:
+            rows.append({
+                'Status': '🗑️ Verdwenen',
+                'Cluster_Naam': clause.cluster_name,
+                'Ref. Frequentie': clause.frequency,
+                'Ref. Advies': clause.advice_code,
+                'Ref. Vertrouwen': clause.confidence,
+                'Tekst': clause.text[:500] + '...' if len(clause.text) > 500 else clause.text,
+                'Opmerking': 'Niet meer aanwezig in huidige data',
+            })
+
+        return pd.DataFrame(rows)
     
     def to_csv_bytes(self, df: pd.DataFrame, delimiter: str = ';') -> bytes:
         """

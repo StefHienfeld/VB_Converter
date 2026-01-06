@@ -19,6 +19,10 @@ export interface FileUploadSectionProps {
   clauseLibraryFiles: File[];
   onClauseLibraryUpload: (files: File[]) => void;
 
+  // Reference file (for yearly vs monthly comparison)
+  referenceFile?: File | null;
+  onReferenceUpload?: (files: File[]) => void;
+
   // Extra instruction
   extraInstruction: string;
   onExtraInstructionChange: (value: string) => void;
@@ -35,6 +39,8 @@ export function FileUploadSection({
   onConditionsUpload,
   clauseLibraryFiles,
   onClauseLibraryUpload,
+  referenceFile,
+  onReferenceUpload,
   extraInstruction,
   onExtraInstructionChange,
   className,
@@ -50,8 +56,8 @@ export function FileUploadSection({
         className
       )}
     >
-      {/* Upload Row - 3 cards horizontal */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Upload Row - 4 cards horizontal */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <FileDropZone
           title="1. Polisbestand"
           description="Sleep Excel/CSV bestand"
@@ -93,6 +99,20 @@ export function FileUploadSection({
           }
           className="animate-fade-up animation-delay-150"
         />
+
+        {onReferenceUpload && (
+          <FileDropZone
+            title="4. Referentie (optioneel)"
+            description="Vorige VB analyse (jaar)"
+            accept=".xlsx,.xls"
+            onFileSelect={onReferenceUpload}
+            status={referenceFile ? "success" : "idle"}
+            uploadedFile={
+              referenceFile ? { name: referenceFile.name, size: referenceFile.size } : null
+            }
+            className="animate-fade-up animation-delay-200"
+          />
+        )}
       </div>
 
       <ExtraInstructionInput

@@ -59,6 +59,7 @@ from hienfeld.services.ai.vector_store import create_vector_store
 from hienfeld.services.ai.rag_service import RAGService
 from hienfeld.services.ai.llm_analysis_service import LLMAnalysisService
 from hienfeld.services.custom_instructions_service import CustomInstructionsService
+from hienfeld.services.reference_analysis_service import ReferenceAnalysisService
 
 # ---------------------------------------------------------------------------
 # Logging & app setup
@@ -119,6 +120,7 @@ def _run_analysis_job(
     policy_filename: str,
     conditions_files: List[tuple[bytes, str]],
     clause_library_files: List[tuple[bytes, str]],
+    reference_file: Optional[tuple[bytes, str]],
     settings: Dict[str, Any],
 ) -> None:
     """
@@ -325,17 +327,30 @@ def _run_analysis_job(
                     semantic_service = None
 
             # LLM analyzer (optional verification); only wire if a client is provided/enabled
-            ai_enabled = bool(settings.get("ai_enabled")) and bool(config.ai.enabled)
-            if ai_enabled:
+            ai_enabled = bool(settings.get("ai_enabled"))
+            env_settings = get_settings()
+            openai_key = env_settings.openai_api_key
+
+            if ai_enabled and openai_key:
                 try:
+                    # Import OpenAI client
+                    from openai import OpenAI
+                    openai_client = OpenAI(api_key=openai_key)
+
                     ai_analyzer = LLMAnalysisService(
-                        client=None,  # Plug real LLM client when API key/model configured
+                        client=openai_client,
                         rag_service=rag_service,
-                        model_name=config.ai.llm_model or "gpt-4",
+                        model_name=env_settings.llm_model or "gpt-4o-mini",
                     )
+                    logger.info(f"✅ AI analysis enabled with model: {env_settings.llm_model}")
+                except ImportError:
+                    logger.warning("⚠️ OpenAI package not installed. Run: pip install openai")
+                    ai_analyzer = None
                 except Exception as exc:
                     logger.warning("LLM analyzer niet geactiveerd: %s", exc)
                     ai_analyzer = None
+            elif ai_enabled and not openai_key:
+                logger.warning("⚠️ AI enabled but OPENAI_API_KEY not set in .env")
 
             semantic_stack_active = bool(semantic_service or rag_service or tfidf_service.is_trained)
         else:
@@ -423,6 +438,25 @@ def _run_analysis_job(
                 logger.warning("⚠️ Custom instructions provided but could not be parsed")
                 custom_instructions_service = None
 
+        # Initialize reference analysis service (for yearly vs monthly comparison)
+        reference_service = None
+        if reference_file:
+            job.update(progress=22, message="📊 Referentie analyse laden...")
+            ref_bytes, ref_filename = reference_file
+            logger.info(f"📊 Loading reference file: {ref_filename} ({len(ref_bytes)} bytes)")
+
+            try:
+                reference_service = ReferenceAnalysisService(
+                    config=config,
+                    similarity_service=hybrid_service or base_similarity_service,
+                )
+                ref_count = reference_service.load_reference_file(ref_bytes, ref_filename)
+                logger.info(f"✅ Reference analysis loaded: {ref_count} clausules uit {ref_filename}")
+                phase_timer.checkpoint(f"Reference loaded ({ref_count} clauses)")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not load reference file: {e}")
+                reference_service = None
+
         analysis = AnalysisService(
             config,
             ai_analyzer=ai_analyzer,
@@ -432,6 +466,7 @@ def _run_analysis_job(
             clause_library_service=None,
             admin_check_service=admin_check,
             custom_instructions_service=custom_instructions_service,
+            reference_service=reference_service,
         )
 
         # Step 3: Load clause library if available
@@ -549,18 +584,36 @@ def _run_analysis_job(
             result_rows.append(row)
 
         # Step 10: Generate Excel (one row per input row)
+        # Build reference matches dict for export (if reference service is active)
+        reference_matches = None
+        gone_texts = None
+        if reference_service:
+            reference_matches = {}
+            for cluster in clusters:
+                # Use simplified text from leader for matching
+                leader_text = cluster.leader.simplified_text if cluster.leader else cluster.leader_text
+                ref_match = reference_service.find_match(leader_text)
+                if ref_match:
+                    reference_matches[cluster.id] = ref_match
+
+            # Get texts from reference that weren't matched (disappeared from current data)
+            gone_texts = reference_service.get_gone_texts()
+            logger.info(f"📊 Reference comparison: {len(reference_matches)} matches, {len(gone_texts)} gone texts")
+
         results_df = export.build_results_dataframe(
             clauses,
             clusters,
             advice_map,
             include_original_columns=True,
             original_df=df,
+            reference_matches=reference_matches,
         )
         excel_bytes = export.to_excel_bytes(
             results_df,
             include_summary=True,
             clusters=clusters,
             advice_map=advice_map,
+            gone_texts=gone_texts,
         )
 
         job.stats = stats
@@ -627,6 +680,7 @@ async def start_analysis(
     policy_file: UploadFile = File(...),
     conditions_files: List[UploadFile] = File(default=[]),
     clause_library_files: List[UploadFile] = File(default=[]),
+    reference_file: Optional[UploadFile] = File(default=None),
     cluster_accuracy: int = Form(90),
     min_frequency: int = Form(20),
     window_size: int = Form(100),
@@ -661,6 +715,14 @@ async def start_analysis(
         if data:
             clause_data.append((data, f.filename))
 
+    # Read reference file (optional - for yearly vs monthly comparison)
+    reference_data: Optional[tuple[bytes, str]] = None
+    if reference_file:
+        ref_bytes = await reference_file.read()
+        if ref_bytes:
+            reference_data = (ref_bytes, reference_file.filename)
+            logger.info(f"Reference file uploaded: {reference_file.filename}")
+
     job_id = str(uuid.uuid4())
     job = AnalysisJob(id=job_id)
     job_repository.save(job)
@@ -684,6 +746,7 @@ async def start_analysis(
         policy_file.filename,
         conditions_data,
         clause_data,
+        reference_data,
         settings,
     )
 

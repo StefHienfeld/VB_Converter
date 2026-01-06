@@ -10,6 +10,7 @@ export interface UseFileUploadReturn extends FileUploadState {
   handlePolicyUpload: (files: File[]) => Promise<void>;
   handleConditionsUpload: (files: File[]) => void;
   handleClauseLibraryUpload: (files: File[]) => void;
+  handleReferenceUpload: (files: File[]) => void;
   setExtraInstruction: (value: string) => void;
   resetFiles: () => void;
 }
@@ -19,6 +20,7 @@ export function useFileUpload(): UseFileUploadReturn {
   const [policyFile, setPolicyFile] = useState<File | null>(DEFAULT_FILE_STATE.policyFile);
   const [conditionsFiles, setConditionsFiles] = useState<File[]>(DEFAULT_FILE_STATE.conditionsFiles);
   const [clauseLibraryFiles, setClauseLibraryFiles] = useState<File[]>(DEFAULT_FILE_STATE.clauseLibraryFiles);
+  const [referenceFile, setReferenceFile] = useState<File | null>(DEFAULT_FILE_STATE.referenceFile);
   const [extraInstruction, setExtraInstruction] = useState(DEFAULT_FILE_STATE.extraInstruction);
   const [estimatedRows, setEstimatedRows] = useState(DEFAULT_FILE_STATE.estimatedRows);
 
@@ -91,10 +93,23 @@ export function useFileUpload(): UseFileUploadReturn {
     [toast]
   );
 
+  const handleReferenceUpload = useCallback(
+    (files: File[]) => {
+      const file = files[0];
+      setReferenceFile(file);
+      toast({
+        title: "Referentie analyse geupload",
+        description: `${file.name} wordt gebruikt voor frequentie-vergelijking.`,
+      });
+    },
+    [toast]
+  );
+
   const resetFiles = useCallback(() => {
     setPolicyFile(null);
     setConditionsFiles([]);
     setClauseLibraryFiles([]);
+    setReferenceFile(null);
     setExtraInstruction("");
     setEstimatedRows(0);
   }, []);
@@ -103,11 +118,13 @@ export function useFileUpload(): UseFileUploadReturn {
     policyFile,
     conditionsFiles,
     clauseLibraryFiles,
+    referenceFile,
     extraInstruction,
     estimatedRows,
     handlePolicyUpload,
     handleConditionsUpload,
     handleClauseLibraryUpload,
+    handleReferenceUpload,
     setExtraInstruction,
     resetFiles,
   };

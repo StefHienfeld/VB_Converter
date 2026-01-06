@@ -6,6 +6,7 @@ export interface StartAnalysisRequest {
   policyFile: File;
   conditionsFiles?: File[];
   clauseLibraryFiles?: File[];
+  referenceFile?: File | null;
   settings: {
     clusterAccuracy: number;
     minFrequency: number;
@@ -69,6 +70,12 @@ function buildFormData(req: StartAnalysisRequest): FormData {
     console.log(`[FormData]   ${idx + 1}. ${file.name} (${file.size} bytes)`);
     form.append("clause_library_files", file);
   });
+
+  // Append reference file (optional - for yearly vs monthly comparison)
+  if (req.referenceFile) {
+    console.log("[FormData] Adding reference file:", req.referenceFile.name, req.referenceFile.size, "bytes");
+    form.append("reference_file", req.referenceFile);
+  }
 
   form.append("cluster_accuracy", String(req.settings.clusterAccuracy));
   form.append("min_frequency", String(req.settings.minFrequency));

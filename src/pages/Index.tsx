@@ -39,6 +39,8 @@ const Index = () => {
             onConditionsUpload={analysis.handleConditionsUpload}
             clauseLibraryFiles={analysis.clauseLibraryFiles}
             onClauseLibraryUpload={analysis.handleClauseLibraryUpload}
+            referenceFile={analysis.referenceFile}
+            onReferenceUpload={analysis.handleReferenceUpload}
             extraInstruction={analysis.extraInstruction}
             onExtraInstructionChange={analysis.setExtraInstruction}
             isCompact={analysis.inputView === "compact"}

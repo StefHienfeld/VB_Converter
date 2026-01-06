@@ -19,6 +19,7 @@ from ..domain.analysis import AnalysisAdvice, AdviceCode, ConfidenceLevel
 from ..domain.standard_clause import StandardClause, ClauseLibraryMatch
 from ..utils.text_normalization import simplify_text
 from ..services.similarity_service import RapidFuzzSimilarityService, SimilarityService, SemanticSimilarityService, SemanticMatch
+from ..domain.reference import ReferenceMatch
 from ..logging_config import get_logger
 
 # Optional hybrid similarity (semantic enhancement)
@@ -87,19 +88,20 @@ class AnalysisService:
     # BREI_MIN_LENGTH removed - now using config.analysis_rules.max_text_length instead
     
     def __init__(
-        self, 
-        config: AppConfig, 
+        self,
+        config: AppConfig,
         ai_analyzer=None,
         similarity_service: Optional[SimilarityService] = None,
         semantic_similarity_service: Optional[SemanticSimilarityService] = None,
         hybrid_similarity_service=None,
         clause_library_service=None,
         admin_check_service=None,
-        custom_instructions_service=None
+        custom_instructions_service=None,
+        reference_service=None
     ):
         """
         Initialize the analysis service.
-        
+
         Args:
             config: Application configuration
             ai_analyzer: Optional AI analyzer service for enhanced analysis
@@ -109,12 +111,14 @@ class AnalysisService:
             clause_library_service: Service for clause library lookups
             admin_check_service: Service for administrative/hygiene checks (Step 0)
             custom_instructions_service: Service for user-defined custom rules (Step 0.5)
+            reference_service: Service for reference analysis comparison (yearly vs monthly)
         """
         self.config = config
         self.ai_analyzer = ai_analyzer
         self.clause_library_service = clause_library_service
         self.admin_check_service = admin_check_service
         self.custom_instructions_service = custom_instructions_service
+        self.reference_service = reference_service
         
         # Similarity service for comparing against conditions (text-based)
         if similarity_service is None:
@@ -136,6 +140,9 @@ class AnalysisService:
         self._policy_sections: List[PolicyDocumentSection] = []
         self._policy_full_text: str = ""
         self._policy_section_lookup: Dict[str, PolicyDocumentSection] = {}
+
+        # Cache for reference matches (text -> ReferenceMatch)
+        self._reference_matches: Dict[str, Optional[ReferenceMatch]] = {}
 
     def _format_section_reference(self, section: PolicyDocumentSection) -> str:
         """
@@ -176,12 +183,45 @@ class AnalysisService:
     def set_clause_library_service(self, service) -> None:
         """
         Set the clause library service for Step 1 of the pipeline.
-        
+
         Args:
             service: ClauseLibraryService instance
         """
         self.clause_library_service = service
         logger.info("Clause library service configured for analysis")
+
+    def set_reference_service(self, service) -> None:
+        """
+        Set the reference analysis service for yearly vs monthly comparison.
+
+        Args:
+            service: ReferenceAnalysisService instance
+        """
+        self.reference_service = service
+        self._reference_matches = {}  # Clear cache
+        logger.info("Reference analysis service configured")
+
+    def _get_reference_match(self, text: str) -> Optional[ReferenceMatch]:
+        """
+        Get cached reference match or perform lookup.
+
+        Args:
+            text: Simplified text to match
+
+        Returns:
+            ReferenceMatch if found, None otherwise
+        """
+        if not self.reference_service:
+            return None
+
+        # Check cache first
+        if text in self._reference_matches:
+            return self._reference_matches[text]
+
+        # Perform lookup
+        match = self.reference_service.find_match(text)
+        self._reference_matches[text] = match
+        return match
     
     def set_semantic_similarity_service(self, service: SemanticSimilarityService) -> None:
         """
@@ -927,8 +967,29 @@ class AnalysisService:
         if keyword_advice:
             return keyword_advice
         
-        # Frequency-based standardization
+        # Frequency-based standardization (with reference check)
         threshold = self.config.analysis_rules.frequency_standardize_threshold
+
+        # Check reference analysis for frequency inheritance
+        ref_match = self._get_reference_match(simple_text)
+
+        # If reference had enough frequency, recommend standardization
+        if ref_match and self.reference_service:
+            ref_freq = ref_match.reference_clause.frequency
+            if ref_freq >= threshold:
+                return AnalysisAdvice(
+                    cluster_id=cluster.id,
+                    advice_code=AdviceCode.STANDAARDISEREN.value,
+                    reason=f"Komt {frequency}x voor (jaaroverzicht: {ref_freq}x). "
+                           f"Volgens referentie-analyse standaardiseren.",
+                    confidence=ConfidenceLevel.HOOG.value,
+                    reference_article="Ref: Standaardiseren",
+                    category="FREQUENT_REF",
+                    cluster_name=cluster.name,
+                    frequency=frequency
+                )
+
+        # Original frequency check
         if frequency >= threshold:
             return AnalysisAdvice(
                 cluster_id=cluster.id,

@@ -16,6 +16,7 @@ export interface FileUploadState {
   policyFile: File | null;
   conditionsFiles: File[];
   clauseLibraryFiles: File[];
+  referenceFile: File | null;
   extraInstruction: string;
   estimatedRows: number;
 }
@@ -32,6 +33,7 @@ export const DEFAULT_FILE_STATE: FileUploadState = {
   policyFile: null,
   conditionsFiles: [],
   clauseLibraryFiles: [],
+  referenceFile: null,
   extraInstruction: "",
   estimatedRows: 0,
 };

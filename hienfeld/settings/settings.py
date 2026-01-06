@@ -71,8 +71,9 @@ class Settings(BaseSettings):
     feature_ai_extensions: bool = False
 
     # === Optional: LLM API (for AI extensions) ===
-    llm_api_key: Optional[str] = None
-    llm_model: Optional[str] = None
+    # OpenAI API key - set via environment variable OPENAI_API_KEY
+    openai_api_key: Optional[str] = None
+    llm_model: str = "gpt-4o-mini"  # Default model (cost-effective)
 
     def get_allowed_origins_list(self) -> List[str]:
         """Parse comma-separated origins into list."""

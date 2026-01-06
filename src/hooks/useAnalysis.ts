@@ -19,11 +19,13 @@ export interface UseAnalysisReturn {
   policyFile: File | null;
   conditionsFiles: File[];
   clauseLibraryFiles: File[];
+  referenceFile: File | null;
   extraInstruction: string;
   estimatedRows: number;
   handlePolicyUpload: (files: File[]) => Promise<void>;
   handleConditionsUpload: (files: File[]) => void;
   handleClauseLibraryUpload: (files: File[]) => void;
+  handleReferenceUpload: (files: File[]) => void;
   setExtraInstruction: (value: string) => void;
 
   // Settings
@@ -109,6 +111,7 @@ export function useAnalysis(): UseAnalysisReturn {
         policyFile: fileUpload.policyFile,
         conditionsFiles: fileUpload.conditionsFiles,
         clauseLibraryFiles: fileUpload.clauseLibraryFiles,
+        referenceFile: fileUpload.referenceFile,
         settings,
         extraInstruction: fileUpload.extraInstruction,
       });
@@ -171,11 +174,13 @@ export function useAnalysis(): UseAnalysisReturn {
     policyFile: fileUpload.policyFile,
     conditionsFiles: fileUpload.conditionsFiles,
     clauseLibraryFiles: fileUpload.clauseLibraryFiles,
+    referenceFile: fileUpload.referenceFile,
     extraInstruction: fileUpload.extraInstruction,
     estimatedRows: fileUpload.estimatedRows,
     handlePolicyUpload: fileUpload.handlePolicyUpload,
     handleConditionsUpload: fileUpload.handleConditionsUpload,
     handleClauseLibraryUpload: fileUpload.handleClauseLibraryUpload,
+    handleReferenceUpload: fileUpload.handleReferenceUpload,
     setExtraInstruction: fileUpload.setExtraInstruction,
 
     // Settings
