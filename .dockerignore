@@ -57,8 +57,7 @@ docs/
 *.md
 !README.md
 
-# Infrastructure (already in context)
-infrastructure/
+# Infrastructure - NOT ignored (nginx.conf needed for frontend build)
 
 # Logs
 *.log
