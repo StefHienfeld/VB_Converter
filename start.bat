@@ -15,12 +15,17 @@ timeout /t 3 /nobreak > nul
 echo [2/2] Starting Frontend (Vite) on port 8080...
 start "Frontend - Vite" cmd /k "cd /d %~dp0 && npm run dev"
 
+:: Wait for frontend to be ready
+timeout /t 5 /nobreak > nul
+
+:: Open browser automatically
+start http://localhost:8080
+
 echo.
 echo ========================================
-echo   Ready! Open in browser:
+echo   Ready! Browser opened at:
 echo   http://localhost:8080
 echo ========================================
 echo.
-echo Press any key to open browser...
-pause > nul
-start http://localhost:8080
+echo (This window will close in 3 seconds)
+timeout /t 3 /nobreak > nul
