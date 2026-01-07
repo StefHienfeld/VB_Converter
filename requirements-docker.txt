@@ -3,6 +3,7 @@
 # Excludes:
 # - reflex (React frontend is primary UI)
 # - pywin32 (Windows only)
+# - CUDA/GPU libraries (CPU-only for smaller image)
 
 # -------------------------
 # Web / API
@@ -36,6 +37,13 @@ rapidfuzz>=3.0.0
 spacy>=3.7.0
 gensim>=4.3.0
 wn>=0.9.0
+
+# -------------------------
+# PyTorch CPU-only (MUST be before sentence-transformers)
+# Saves ~5GB by excluding CUDA/NVIDIA libraries
+# -------------------------
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.0.0
 
 # -------------------------
 # Sentence Embeddings (local)
