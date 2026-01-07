@@ -33,10 +33,12 @@ jobs:
         run: pip install flake8 black isort
 
       - name: Run Black (check only)
-        run: black --check --line-length 120 hienfeld/ hienfeld_api/ || true
+        run: black --check --line-length 120 hienfeld/ hienfeld_api/
+        continue-on-error: true  # Warning only - fix later
 
       - name: Run Flake8
-        run: flake8 hienfeld/ hienfeld_api/ --max-line-length=120 --ignore=E501,W503 || true
+        run: flake8 hienfeld/ hienfeld_api/ --max-line-length=120 --ignore=E501,W503
+        continue-on-error: true  # Warning only - fix later
 
   backend-test:
     name: Backend Tests
@@ -62,8 +64,8 @@ jobs:
         env:
           ENVIRONMENT: test
           DEBUG: false
-        run: |
-          pytest tests/ -v --tb=short || echo "Tests completed (some may have failed)"
+        run: pytest tests/ -v --tb=short
+        # Tests MUST pass - no masking failures
 
   # ===========================================================================
   # SECURITY SCAN
@@ -92,8 +94,9 @@ jobs:
         with:
           scan-type: 'fs'
           scan-ref: '.'
-          severity: 'CRITICAL,HIGH'
-        continue-on-error: true
+          severity: 'CRITICAL'
+          exit-code: '1'  # Fail on CRITICAL vulnerabilities
+        continue-on-error: false  # Block deployment if critical issues found
 
   # ===========================================================================
   # FRONTEND CHECKS
@@ -114,10 +117,12 @@ jobs:
         run: npm ci --legacy-peer-deps
 
       - name: Run ESLint
-        run: npm run lint || true
+        run: npm run lint
+        continue-on-error: true  # Warning only - fix later
 
       - name: Run TypeScript check
-        run: npx tsc --noEmit || true
+        run: npx tsc --noEmit
+        continue-on-error: true  # Warning only - fix later
 
   frontend-build:
     name: Frontend Build
