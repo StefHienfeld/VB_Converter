@@ -852,10 +852,7 @@ async def download_report(job_id: str) -> StreamingResponse:
     )
 
 
-@app.get("/api/health")
-async def healthcheck() -> Dict[str, str]:
-    """Simple health endpoint for monitoring."""
-    return {"status": "ok"}
+# Health endpoints moved to routes.py (health_router)
 
 
 @app.post("/api/test-custom-instructions")
