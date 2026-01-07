@@ -54,7 +54,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install -r requirements-docker.txt
           pip install pytest pytest-cov pytest-asyncio httpx
 
       - name: Download SpaCy model
@@ -85,9 +85,9 @@ jobs:
         run: |
           pip install safety pip-audit
           echo "Running safety check..."
-          safety check -r requirements.txt --full-report || true
+          safety check -r requirements-docker.txt --full-report || true
           echo "Running pip-audit..."
-          pip-audit -r requirements.txt || true
+          pip-audit -r requirements-docker.txt || true
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
