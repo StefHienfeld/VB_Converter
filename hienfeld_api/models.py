@@ -141,6 +141,51 @@ class JobSubmissionResponse(BaseModel):
     message: str = "Analysis started"
 
 
+class JobStatus:
+    """Job status constants"""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class AnalysisJob:
+    """In-memory job object for tracking analysis progress"""
+    def __init__(self, id: str):
+        self.id = id
+        self.status = JobStatus.PENDING
+        self.progress = 0
+        self.status_message = "Wachten op start..."
+        self.error: Optional[str] = None
+        self.results: Optional[List[dict]] = None
+        self.stats: Optional[dict] = None
+        self.report_bytes: Optional[bytes] = None
+
+    def update(self, progress: int = None, message: str = None, status: str = None):
+        """Update job progress"""
+        if progress is not None:
+            self.progress = progress
+        if message is not None:
+            self.status_message = message
+        if status is not None:
+            self.status = status
+
+    def complete(self, results: List[dict], stats: dict, report_bytes: bytes):
+        """Mark job as completed"""
+        self.status = JobStatus.COMPLETED
+        self.progress = 100
+        self.status_message = "Analyse voltooid"
+        self.results = results
+        self.stats = stats
+        self.report_bytes = report_bytes
+
+    def fail(self, error: str):
+        """Mark job as failed"""
+        self.status = JobStatus.FAILED
+        self.error = error
+        self.status_message = f"Fout: {error}"
+
+
 class JobStatusResponse(BaseModel):
     """Response for job status check"""
     job_id: str
@@ -149,3 +194,31 @@ class JobStatusResponse(BaseModel):
     status_message: str
     error: Optional[str] = None
     stats: Optional[dict] = None
+
+
+class StartAnalysisResponse(BaseModel):
+    """Response when analysis is started"""
+    job_id: str
+    status: str
+
+
+class UploadPreviewResponse(BaseModel):
+    """Response for upload preview"""
+    columns: List[str]
+    row_count: int
+    text_column: str
+    policy_column: Optional[str] = None
+
+
+class AnalysisResultRowModel(BaseModel):
+    """Single row in analysis results"""
+    class Config:
+        extra = "allow"  # Allow extra fields from analysis results
+
+
+class AnalysisResultsResponse(BaseModel):
+    """Response for full analysis results"""
+    job_id: str
+    status: str
+    stats: dict
+    results: List[AnalysisResultRowModel]
