@@ -56,6 +56,8 @@ const Index = () => {
             onCancelAnalysis={analysis.handleCancelAnalysis}
             onNewAnalysis={analysis.handleNewAnalysis}
             onDownload={analysis.handleDownload}
+            aiEnabled={analysis.settings.aiEnabled}
+            onAiToggle={(enabled) => analysis.setSettings((prev) => ({ ...prev, aiEnabled: enabled }))}
             className="mb-8"
           />
         </div>
@@ -104,6 +106,8 @@ const Index = () => {
                 steps={analysis.progressSteps}
                 currentProgress={analysis.currentProgress}
                 currentMessage={analysis.currentMessage}
+                jobStatus={analysis.jobStatus}
+                startTime={analysis.startTime ?? undefined}
                 className="order-2 lg:order-1 animate-fade-up animation-delay-200"
               >
                 {analysis.analysisComplete && (

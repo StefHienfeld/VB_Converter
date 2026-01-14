@@ -43,6 +43,8 @@ export interface UseAnalysisReturn {
   progressSteps: { id: string; label: string; status: "pending" | "active" | "completed" }[];
   currentProgress: number;
   currentMessage: string;
+  jobStatus: string;
+  startTime: number | null;
 
   // UI state
   inputView: InputView;
@@ -71,6 +73,7 @@ export function useAnalysis(): UseAnalysisReturn {
   const [jobId, setJobId] = useState<string | null>(null);
   const [results, setResults] = useState<AnalysisResultRow[]>([]);
   const [inputView, setInputView] = useState<InputView>("full");
+  const [startTime, setStartTime] = useState<number | null>(null);
 
   // Polling hook with callbacks
   const polling = usePolling({
@@ -106,6 +109,10 @@ export function useAnalysis(): UseAnalysisReturn {
       setResults([]);
       progress.resetProgress();
       setInputView("compact");
+      
+      // Set start time and show immediate feedback
+      setStartTime(Date.now());
+      progress.setInitializing();
 
       const res = await startAnalysis({
         policyFile: fileUpload.policyFile,
@@ -120,6 +127,7 @@ export function useAnalysis(): UseAnalysisReturn {
       polling.startPolling(res.job_id);
     } catch (error: unknown) {
       setIsAnalyzing(false);
+      setStartTime(null);
       const err = error instanceof Error ? error : new Error("Er is een fout opgetreden bij het starten.");
       toast({
         title: "Analyse starten mislukt",
@@ -133,6 +141,7 @@ export function useAnalysis(): UseAnalysisReturn {
     polling.stopPolling();
     setIsAnalyzing(false);
     setInputView("full");
+    setStartTime(null);
     toast({
       title: "Analyse geannuleerd",
       description: "De analyse is gestopt. U kunt een nieuwe analyse starten.",
@@ -166,8 +175,10 @@ export function useAnalysis(): UseAnalysisReturn {
     setAnalysisComplete(false);
     setResults([]);
     setJobId(null);
+    setStartTime(null);
     progress.resetProgress();
-  }, [fileUpload.policyFile, progress]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileUpload.policyFile]); // Alleen resetten bij nieuw bestand
 
   return {
     // File upload state
@@ -198,6 +209,8 @@ export function useAnalysis(): UseAnalysisReturn {
     progressSteps: progress.progressSteps,
     currentProgress: progress.currentProgress,
     currentMessage: progress.currentMessage,
+    jobStatus: progress.jobStatus,
+    startTime,
 
     // UI state
     inputView,

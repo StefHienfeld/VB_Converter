@@ -43,6 +43,7 @@ class ReferenceClause:
         confidence: Confidence level from reference
         reason: Reason/explanation from reference
         reference_article: Article reference from reference
+        policy_number: Policy number for per-policy matching
         is_matched: Whether this clause was matched to current data
     """
     text: str
@@ -53,6 +54,7 @@ class ReferenceClause:
     confidence: str = ""
     reason: str = ""
     reference_article: str = ""
+    policy_number: str = ""
     is_matched: bool = False
 
     def mark_matched(self) -> None:
@@ -103,17 +105,24 @@ class ReferenceData:
 
     # Lookup caches (built after loading)
     _text_lookup: Dict[str, ReferenceClause] = field(default_factory=dict, repr=False)
+    _text_policy_lookup: Dict[str, ReferenceClause] = field(default_factory=dict, repr=False)
     _cluster_lookup: Dict[str, List[ReferenceClause]] = field(default_factory=dict, repr=False)
 
     def build_indexes(self) -> None:
         """Build lookup indexes for fast matching."""
         self._text_lookup = {}
+        self._text_policy_lookup = {}
         self._cluster_lookup = {}
 
         for clause in self.clauses:
             # Index by simplified text (for exact matching)
             if clause.simplified_text:
                 self._text_lookup[clause.simplified_text] = clause
+
+            # Index by text + policy_number (for per-policy matching)
+            if clause.simplified_text and clause.policy_number:
+                key = f"{clause.simplified_text}|{clause.policy_number}"
+                self._text_policy_lookup[key] = clause
 
             # Index by cluster name (for grouping)
             if clause.cluster_name:
@@ -124,6 +133,13 @@ class ReferenceData:
     def get_by_text(self, simplified_text: str) -> Optional[ReferenceClause]:
         """Get reference clause by exact simplified text match."""
         return self._text_lookup.get(simplified_text)
+
+    def get_by_text_and_policy(
+        self, simplified_text: str, policy_number: str
+    ) -> Optional[ReferenceClause]:
+        """Get reference clause by exact text + policy number match."""
+        key = f"{simplified_text}|{policy_number}"
+        return self._text_policy_lookup.get(key)
 
     def get_by_cluster(self, cluster_name: str) -> List[ReferenceClause]:
         """Get all reference clauses for a cluster name."""

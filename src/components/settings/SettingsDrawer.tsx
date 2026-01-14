@@ -27,7 +27,7 @@ export const SettingsDrawer = ({
 }: SettingsDrawerProps) => {
   return (
     <Sheet open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <SheetContent className="glass-panel w-[400px] border-l-0 p-0 flex flex-col">
+      <SheetContent className="glass-panel w-[400px] sm:w-[450px] border-l-0 p-0 flex flex-col overflow-x-hidden">
         <SheetHeader className="p-6 pb-0 shrink-0">
           <SheetTitle className="text-lg font-semibold text-foreground">
             Instellingen
@@ -113,19 +113,29 @@ export const SettingsDrawer = ({
           </div>
 
           {/* AI Toggle */}
-          <div className="flex items-center justify-between py-4 border-t border-border">
-            <div>
-              <Label className="text-sm font-medium text-foreground">
-                AI Analyse
-              </Label>
-              <p className="text-xs text-muted-foreground mt-1">
-                Gebruik AI voor slimmere matching
-              </p>
+          <div className="py-4 border-t border-border">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <Label htmlFor="ai-toggle-settings" className="text-sm font-medium text-foreground block">
+                  AI Analyse (OpenAI)
+                </Label>
+                <p className="text-xs text-muted-foreground mt-1">
+                  GPT voor slimmere clausule-analyse
+                </p>
+              </div>
+              <div className="flex-shrink-0 flex items-center justify-end" style={{ minWidth: '60px' }}>
+                <Switch
+                  id="ai-toggle-settings"
+                  checked={settings.aiEnabled}
+                  onCheckedChange={(checked) => {
+                    console.log('AI toggle changed:', checked);
+                    onSettingsChange({ aiEnabled: checked });
+                  }}
+                  className="flex-shrink-0 relative z-10"
+                  aria-label="Toggle AI Analyse"
+                />
+              </div>
             </div>
-            <Switch
-              checked={settings.aiEnabled}
-              onCheckedChange={(checked) => onSettingsChange({ aiEnabled: checked })}
-            />
           </div>
         </div>
       </SheetContent>

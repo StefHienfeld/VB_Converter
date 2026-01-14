@@ -598,31 +598,12 @@ def _run_analysis_job(
             result_rows.append(row)
 
         # Step 10: Generate Excel (one row per input row)
-        # Build reference matches dict for export (if reference service is active)
-        reference_matches = None
+        # Pass reference_service directly - it will do per-clause matching with caching
         gone_texts = None
         if reference_service:
-            reference_matches = {}
-            total_clusters = len(clusters)
-            for idx, cluster in enumerate(clusters):
-                # Progress update every 10% to prevent UI hanging
-                if idx % max(1, total_clusters // 10) == 0:
-                    pct = 95 + int((idx / max(1, total_clusters)) * 4)  # 95% -> 99%
-                    job.update(progress=pct, message=f"📊 Reference vergelijking... ({idx}/{total_clusters})")
-
-                # FIX: Use leader_clause (not leader) - cluster.leader doesn't exist!
-                leader_text = cluster.leader_clause.simplified_text if cluster.leader_clause else cluster.leader_text
-
-                # FIX: Normalize key to match export_service lookup (line 96: clause.simplified_text.lower().strip())
-                normalized_key = leader_text.lower().strip() if leader_text else ""
-
-                ref_match = reference_service.find_match(leader_text)
-                if ref_match and normalized_key:
-                    reference_matches[normalized_key] = ref_match
-
-            # Get texts from reference that weren't matched (disappeared from current data)
-            gone_texts = reference_service.get_gone_texts()
-            logger.info(f"📊 Reference comparison: {len(reference_matches)} matches, {len(gone_texts)} gone texts")
+            job.update(progress=95, message="📊 Excel genereren met referentie vergelijking...")
+            ref_count = len(reference_service._reference_data.clauses) if reference_service._reference_data else 0
+            logger.info(f"📊 Reference service active: {ref_count} reference clauses loaded")
 
         results_df = export.build_results_dataframe(
             clauses,
@@ -630,8 +611,14 @@ def _run_analysis_job(
             advice_map,
             include_original_columns=True,
             original_df=df,
-            reference_matches=reference_matches,
+            reference_service=reference_service,  # Pass service directly for per-clause matching
         )
+
+        # Get gone texts after export (all clauses have been matched by now)
+        if reference_service:
+            gone_texts = reference_service.get_gone_texts()
+            stats_ref = reference_service.get_statistics()
+            logger.info(f"📊 Reference comparison: {stats_ref.get('matched', 0)} matches, {len(gone_texts)} gone texts")
         excel_bytes = export.to_excel_bytes(
             results_df,
             include_summary=True,

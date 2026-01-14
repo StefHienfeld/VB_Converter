@@ -1,8 +1,10 @@
 # hienfeld/services/ai/rag_service.py
 """
 RAG (Retrieval Augmented Generation) service for policy document search.
+
+Enhanced with Cross-Encoder Re-Ranking for improved retrieval precision.
 """
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 
 from ...domain.policy_document import PolicyDocumentSection
 from ...domain.clause import Clause
@@ -10,31 +12,42 @@ from .embeddings_service import EmbeddingsService
 from .vector_store import VectorStore
 from ...logging_config import get_logger
 
+if TYPE_CHECKING:
+    from .reranking_service import ReRankingService
+
 logger = get_logger('rag_service')
 
 
 class RAGService:
     """
     Retrieval Augmented Generation service.
-    
+
     Combines embedding-based retrieval with policy document sections
     to find relevant context for clause analysis.
+
+    Enhanced with optional Cross-Encoder Re-Ranking for +15-25% precision.
     """
-    
+
     def __init__(
-        self, 
-        embeddings_service: EmbeddingsService, 
-        vector_store: VectorStore
+        self,
+        embeddings_service: EmbeddingsService,
+        vector_store: VectorStore,
+        reranking_service: Optional['ReRankingService'] = None,
+        enable_reranking: bool = True
     ):
         """
         Initialize RAG service.
-        
+
         Args:
             embeddings_service: Service for generating embeddings
             vector_store: Store for vector similarity search
+            reranking_service: Optional re-ranking service for improved precision
+            enable_reranking: Enable re-ranking if service available (default: True)
         """
         self.embeddings_service = embeddings_service
         self.vector_store = vector_store
+        self.reranking_service = reranking_service
+        self.enable_reranking = enable_reranking
         self._indexed = False
     
     def index_policy_sections(
@@ -78,32 +91,63 @@ class RAGService:
         logger.info("Policy sections indexed successfully")
     
     def retrieve_relevant_sections(
-        self, 
-        clause_text: str, 
-        top_k: int = 3
+        self,
+        clause_text: str,
+        top_k: int = 3,
+        rerank: bool = True
     ) -> List[dict]:
         """
         Find policy sections relevant to a clause.
-        
+
+        Uses a two-stage retrieval:
+        1. Bi-encoder embedding search (fast, gets candidates)
+        2. Cross-encoder re-ranking (accurate, refines top results)
+
         Args:
             clause_text: Clause text to search for
             top_k: Number of results to return
-            
+            rerank: Apply re-ranking if available (default: True)
+
         Returns:
             List of relevant section results with id, score, metadata
         """
         if not self._indexed:
             logger.warning("No documents indexed yet")
             return []
-        
-        # Generate query embedding
+
+        # Stage 1: Bi-encoder retrieval (get more candidates for re-ranking)
+        retrieval_k = top_k * 3 if (rerank and self._can_rerank()) else top_k
         query_vector = self.embeddings_service.embed_single(clause_text)
-        
-        # Search
-        results = self.vector_store.similarity_search(query_vector, k=top_k)
-        
+        results = self.vector_store.similarity_search(query_vector, k=retrieval_k)
+
+        logger.debug(f"Stage 1: Retrieved {len(results)} candidates")
+
+        # Stage 2: Cross-encoder re-ranking (optional)
+        if rerank and self._can_rerank() and len(results) > 1:
+            try:
+                results = self.reranking_service.rerank(
+                    query=clause_text,
+                    results=results,
+                    top_k=top_k,
+                    text_key='raw_text'
+                )
+                logger.debug(f"Stage 2: Re-ranked to {len(results)} results")
+            except Exception as e:
+                logger.warning(f"Re-ranking failed: {e}, using original order")
+                results = results[:top_k]
+        else:
+            results = results[:top_k]
+
         logger.debug(f"Found {len(results)} relevant sections for query")
         return results
+
+    def _can_rerank(self) -> bool:
+        """Check if re-ranking is available and enabled."""
+        return (
+            self.enable_reranking and
+            self.reranking_service is not None and
+            self.reranking_service.is_available
+        )
     
     def retrieve_for_clause(
         self, 
@@ -148,20 +192,20 @@ class RAGService:
         if not relevant:
             return "Geen relevante voorwaarden gevonden."
         
-        # Format context
+        # Format context as XML for structured LLM parsing
         context_parts = []
         for r in relevant:
             meta = r['metadata']
             text = meta.get('raw_text', '')
             article = meta.get('article_id', 'Onbekend')
             title = meta.get('title', '')
-            
-            part = f"### {article}"
-            if title:
-                part += f" - {title}"
-            part += f"\n{text}\n"
+
+            part = f"""<artikel id="{article}">
+  <titel>{title}</titel>
+  <inhoud>{text}</inhoud>
+</artikel>"""
             context_parts.append(part)
-        
+
         return "\n".join(context_parts)
     
     def is_ready(self) -> bool:

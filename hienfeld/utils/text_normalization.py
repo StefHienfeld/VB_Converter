@@ -1,10 +1,197 @@
 # hienfeld/utils/text_normalization.py
 """
 Text normalization utilities for consistent text comparison.
+
+Enhanced with:
+- NormalizationLevel enum for context-aware preprocessing
+- Legal reference preservation to maintain juridical nuances
+- Multiple normalization strategies for different use cases
 """
 import re
 import unicodedata
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple
+from enum import Enum
+
+
+# =============================================================================
+# Normalization Levels
+# =============================================================================
+
+class NormalizationLevel(Enum):
+    """
+    Levels of text normalization for different use cases.
+
+    RAW: No normalization - original text preserved
+    LIGHT: Only whitespace/encoding fixes - for display
+    EMBEDDING: Preserve legal info, normalize rest - for vector embeddings
+    CLUSTERING: Aggressive replacement - for duplicate detection
+    """
+    RAW = "raw"
+    LIGHT = "light"
+    EMBEDDING = "embedding"
+    CLUSTERING = "clustering"
+
+
+# =============================================================================
+# Legal Reference Patterns (preserved during EMBEDDING normalization)
+# =============================================================================
+
+LEGAL_PATTERNS = {
+    'article_ref': r'(?:Art\.?\s*\d+[:.]\d+(?:\.\d+)?|artikel\s+\d+[:.]\d+(?:\.\d+)?)',
+    'law_ref': r'(?:BW|Wft|WvK|Sr|Sv|AWR|Awb|WOR)\s*\d*',
+    'euro_amount': r'(?:EUR|€)\s*[\d.,]+(?:\s*(?:miljoen|duizend|k|m))?',
+    'percentage': r'\d+[.,]?\d*\s*%',
+    'date_full': r'\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}',
+}
+
+
+def preserve_legal_references(text: str) -> Tuple[str, Dict[str, str]]:
+    """
+    Extract and preserve legal references before normalization.
+
+    Replaces legal references with placeholders so they survive normalization,
+    then can be restored afterwards.
+
+    Args:
+        text: Input text
+
+    Returns:
+        Tuple of (text with placeholders, dict mapping placeholders to original)
+    """
+    if not text:
+        return "", {}
+
+    preserved = {}
+    result = text
+
+    for name, pattern in LEGAL_PATTERNS.items():
+        matches = re.findall(pattern, result, re.IGNORECASE)
+        for i, match in enumerate(matches):
+            placeholder = f"__LEGAL_{name.upper()}_{i}__"
+            preserved[placeholder] = match
+            # Only replace first occurrence to handle duplicates correctly
+            result = result.replace(match, placeholder, 1)
+
+    return result, preserved
+
+
+def restore_legal_references(text: str, preserved: Dict[str, str]) -> str:
+    """
+    Restore legal references after normalization.
+
+    Args:
+        text: Text with placeholders
+        preserved: Dict mapping placeholders to original values
+
+    Returns:
+        Text with original legal references restored
+    """
+    if not text or not preserved:
+        return text or ""
+
+    result = text
+    for placeholder, original in preserved.items():
+        result = result.replace(placeholder, original)
+
+    return result
+
+
+def fix_encoding(text: str) -> str:
+    """
+    Fix common encoding issues in text.
+
+    Args:
+        text: Input text with potential encoding issues
+
+    Returns:
+        Text with fixed encoding
+    """
+    if not text:
+        return ""
+
+    # Common mojibake replacements
+    replacements = {
+        'Ã©': 'é',
+        'Ã«': 'ë',
+        'Ã¯': 'ï',
+        'Ã¶': 'ö',
+        'Ã¼': 'ü',
+        'Ã€': 'À',
+        'â€™': "'",
+        'â€"': '–',
+        'â€"': '—',
+        'â€œ': '"',
+        'â€': '"',
+        'Â': '',
+        '\ufeff': '',  # BOM
+    }
+
+    result = text
+    for bad, good in replacements.items():
+        result = result.replace(bad, good)
+
+    # Unicode normalization
+    result = unicodedata.normalize('NFKC', result)
+
+    return result
+
+
+def normalize_text(text: str, level: NormalizationLevel) -> str:
+    """
+    Normalize text based on intended use case.
+
+    Args:
+        text: Input text to normalize
+        level: Normalization level determining how aggressive to be
+
+    Returns:
+        Normalized text appropriate for the use case
+    """
+    if not text:
+        return ""
+
+    # RAW: No normalization at all
+    if level == NormalizationLevel.RAW:
+        return text
+
+    # LIGHT: Only encoding and whitespace fixes
+    if level == NormalizationLevel.LIGHT:
+        result = fix_encoding(text)
+        result = normalize_whitespace(result)
+        return result
+
+    # EMBEDDING: Preserve legal info, light normalization
+    if level == NormalizationLevel.EMBEDDING:
+        # First preserve legal references
+        result, preserved = preserve_legal_references(text)
+
+        # Fix encoding
+        result = fix_encoding(result)
+
+        # Normalize whitespace
+        result = normalize_whitespace(result)
+
+        # Lowercase (but legal refs will be restored)
+        result = result.lower()
+
+        # Remove only truly unnecessary punctuation (keep legal notation)
+        # Keep: . : - / ( ) € % for legal refs and amounts
+        result = re.sub(r'[^\w\s€$.,:\-/()%]', '', result)
+
+        # Restore legal references
+        result = restore_legal_references(result, preserved)
+
+        # Final whitespace cleanup
+        result = normalize_whitespace(result)
+
+        return result
+
+    # CLUSTERING: Aggressive normalization (existing function)
+    if level == NormalizationLevel.CLUSTERING:
+        return normalize_for_clustering(text)
+
+    # Default fallback
+    return text
 
 
 def normalize_whitespace(text: str) -> str:

@@ -6,8 +6,9 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { getJobStatus, getResults, JobStatusResponse, AnalysisResultsResponse } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 
-const MAX_POLLING_TIME = 600000; // 10 minutes
+// GEEN timeout - analyses kunnen lang duren, backend bepaalt wanneer job klaar is
 const POLL_INTERVAL = 1500; // 1.5 seconds
+const MAX_RETRIES = 3; // Retry bij netwerk errors
 
 export interface UsePollingOptions {
   onProgress?: (status: JobStatusResponse) => void;
@@ -29,14 +30,14 @@ export function usePolling(options: UsePollingOptions = {}): UsePollingReturn {
   const [isPolling, setIsPolling] = useState(false);
   const [stats, setStats] = useState<JobStatusResponse["stats"] | null>(null);
 
-  const pollingStartTimeRef = useRef<number | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const retryCountRef = useRef<number>(0);
 
   const stopPolling = useCallback(() => {
     setIsPolling(false);
-    pollingStartTimeRef.current = null;
     activeJobIdRef.current = null;
+    retryCountRef.current = 0;
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
@@ -51,27 +52,12 @@ export function usePolling(options: UsePollingOptions = {}): UsePollingReturn {
       }
 
       try {
-        // Check for timeout
-        if (
-          pollingStartTimeRef.current &&
-          Date.now() - pollingStartTimeRef.current > MAX_POLLING_TIME
-        ) {
-          stopPolling();
-          const error = new Error(
-            "De analyse duurt te lang. Mogelijk is de server bezig met het downloaden van ML modellen. Probeer het later opnieuw."
-          );
-          toast({
-            title: "Analyse time-out",
-            description: error.message,
-            variant: "destructive",
-          });
-          onError?.(error);
-          return;
-        }
-
         const status = await getJobStatus(jobId);
+        retryCountRef.current = 0; // Reset retry count on success
         onProgress?.(status);
         setStats(status.stats ?? null);
+
+        // Geen timeout - laat de analyse doorlopen totdat backend completed/failed retourneert
 
         if (status.status === "completed") {
           const results = await getResults(jobId);
@@ -97,11 +83,37 @@ export function usePolling(options: UsePollingOptions = {}): UsePollingReturn {
           timeoutRef.current = setTimeout(() => poll(jobId), POLL_INTERVAL);
         }
       } catch (error: unknown) {
-        stopPolling();
         const err = error instanceof Error ? error : new Error("Kon de status niet ophalen.");
+        
+        // Specifieke handling voor 404 (job niet meer beschikbaar) - geen retry
+        const is404 = err.message.includes("404") || err.message.includes("niet gevonden");
+        
+        if (is404) {
+          stopPolling();
+          toast({
+            title: "Analyse onderbroken",
+            description: "De server is mogelijk herstart. Start de analyse opnieuw.",
+            variant: "destructive",
+          });
+          onError?.(err);
+          return;
+        }
+        
+        // Retry bij netwerk/tijdelijke errors
+        retryCountRef.current += 1;
+        if (retryCountRef.current <= MAX_RETRIES) {
+          console.warn(`[Polling] Retry ${retryCountRef.current}/${MAX_RETRIES} na error:`, err.message);
+          // Wacht iets langer bij retry (exponential backoff)
+          const retryDelay = POLL_INTERVAL * Math.pow(2, retryCountRef.current - 1);
+          timeoutRef.current = setTimeout(() => poll(jobId), retryDelay);
+          return;
+        }
+        
+        // Max retries bereikt, stop polling
+        stopPolling();
         toast({
           title: "Fout bij ophalen status",
-          description: err.message,
+          description: `${err.message} (na ${MAX_RETRIES} pogingen)`,
           variant: "destructive",
         });
         onError?.(err);
@@ -114,7 +126,6 @@ export function usePolling(options: UsePollingOptions = {}): UsePollingReturn {
     (jobId: string) => {
       stopPolling(); // Clear any existing polling
       setIsPolling(true);
-      pollingStartTimeRef.current = Date.now();
       activeJobIdRef.current = jobId;
       poll(jobId);
     },

@@ -126,6 +126,7 @@ tmp/
 temp/
 *.tmp
 *.bak
+nul
 
 # ======================
 # Node / Frontend

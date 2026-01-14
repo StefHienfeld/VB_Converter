@@ -45,11 +45,13 @@ class ReferenceAnalysisService:
     COLUMN_MAPPINGS = {
         'text': ['Tekst', 'tekst', 'Text', 'text', 'Vrije Tekst', 'vrije tekst'],
         'frequency': ['Frequentie', 'frequentie', 'Frequency', 'frequency', 'Freq', 'freq'],
+        'orig_frequency': ['Orig. Frequentie', 'orig. frequentie', 'Original Frequency', 'OrigFrequentie'],
         'advice': ['Advies', 'advies', 'Advice', 'advice'],
         'cluster_name': ['Cluster_Naam', 'cluster_naam', 'Cluster Naam', 'ClusterNaam', 'Cluster_ID'],
         'confidence': ['Vertrouwen', 'vertrouwen', 'Confidence', 'confidence'],
         'reason': ['Reden', 'reden', 'Reason', 'reason'],
         'article': ['Artikel', 'artikel', 'Article', 'article'],
+        'policy_number': ['Polisnummer', 'polisnummer', 'Polis', 'polis', 'Policy', 'policy', 'PolicyNumber'],
     }
 
     def __init__(
@@ -125,10 +127,17 @@ class ReferenceAnalysisService:
             confidence_col = self._find_column(df, 'confidence')
             reason_col = self._find_column(df, 'reason')
             article_col = self._find_column(df, 'article')
+            policy_col = self._find_column(df, 'policy_number')
+            orig_freq_col = self._find_column(df, 'orig_frequency')
+
+            if policy_col:
+                logger.info(f"Found policy number column: {policy_col}")
+            if orig_freq_col:
+                logger.info(f"Found original frequency column: {orig_freq_col} (will use for UNIEK clusters)")
 
             # Parse rows into ReferenceClause objects
             clauses = []
-            seen_texts = set()  # Track unique texts to avoid duplicates
+            seen_keys = set()  # Track unique text+policy combinations to avoid duplicates
 
             for idx, row in df.iterrows():
                 text = str(row.get(text_col, "")).strip()
@@ -137,15 +146,29 @@ class ReferenceAnalysisService:
                 if not text or text == "nan":
                     continue
 
-                # Skip duplicates (use simplified text for deduplication)
                 simplified = self._simplify_text(text)
-                if simplified in seen_texts:
+                policy_number = ""
+                if policy_col and pd.notna(row.get(policy_col)):
+                    policy_number = str(row[policy_col]).strip()
+
+                # Skip duplicates (use text + policy_number for deduplication)
+                # This allows same text on different policies to be stored separately
+                dedup_key = f"{simplified}|{policy_number}" if policy_number else simplified
+                if dedup_key in seen_keys:
                     continue
-                seen_texts.add(simplified)
+                seen_keys.add(dedup_key)
 
                 # Parse frequency (default to 1 if missing)
+                # IMPORTANT: Prefer orig_frequency over frequency for UNIEK clusters
+                # This ensures we get the real frequency (1) instead of cluster size (625)
                 frequency = 1
-                if freq_col and pd.notna(row.get(freq_col)):
+                if orig_freq_col and pd.notna(row.get(orig_freq_col)):
+                    # Use original frequency (pre-grouping) if available
+                    try:
+                        frequency = int(row[orig_freq_col])
+                    except (ValueError, TypeError):
+                        frequency = 1
+                elif freq_col and pd.notna(row.get(freq_col)):
                     try:
                         frequency = int(row[freq_col])
                     except (ValueError, TypeError):
@@ -164,6 +187,7 @@ class ReferenceAnalysisService:
                     confidence=str(row.get(confidence_col, "")).strip() if confidence_col else "",
                     reason=str(row.get(reason_col, "")).strip() if reason_col else "",
                     reference_article=str(row.get(article_col, "")).strip() if article_col else "",
+                    policy_number=policy_number,
                 )
                 clauses.append(clause)
 
@@ -193,18 +217,21 @@ class ReferenceAnalysisService:
     def find_match(
         self,
         text: str,
+        policy_number: Optional[str] = None,
         min_score: float = 0.90
     ) -> Optional[ReferenceMatch]:
         """
         Find the best matching reference clause for a given text.
 
         Matching strategy (in order of speed):
-        1. Exact match on simplified_text (O(1) hash lookup)
+        0. Exact match on simplified_text + policy_number (O(1) hash lookup) - NEW
+        1. Exact match on simplified_text only (O(1) hash lookup)
         2. Fuzzy match via RapidFuzz (threshold: min_score)
         3. Semantic match via hybrid service (if available, for borderline cases)
 
         Args:
             text: Text to match
+            policy_number: Optional policy number for per-policy matching
             min_score: Minimum similarity score (default: 0.90)
 
         Returns:
@@ -213,12 +240,27 @@ class ReferenceAnalysisService:
         if not self.is_loaded:
             return None
 
-        # Check cache first
         simplified = self._simplify_text(text)
-        if simplified in self._match_cache:
-            return self._match_cache[simplified]
 
-        # TIER 1: Exact match (O(1))
+        # Build cache key including policy number for per-policy caching
+        cache_key = f"{simplified}|{policy_number}" if policy_number else simplified
+        if cache_key in self._match_cache:
+            return self._match_cache[cache_key]
+
+        # TIER 0: Exact match on text + policy_number (O(1)) - NEW
+        if policy_number:
+            policy_match = self._reference_data.get_by_text_and_policy(simplified, policy_number)
+            if policy_match:
+                policy_match.mark_matched()
+                result = ReferenceMatch(
+                    reference_clause=policy_match,
+                    match_type="exact_policy",
+                    match_score=1.0,
+                )
+                self._match_cache[cache_key] = result
+                return result
+
+        # TIER 1: Exact match on text only (O(1))
         exact_match = self._reference_data.get_by_text(simplified)
         if exact_match:
             exact_match.mark_matched()
@@ -227,7 +269,7 @@ class ReferenceAnalysisService:
                 match_type="exact",
                 match_score=1.0,
             )
-            self._match_cache[simplified] = result
+            self._match_cache[cache_key] = result
             return result
 
         # TIER 2: Fast fuzzy match using RapidFuzz extractOne (optimized C implementation)
@@ -262,11 +304,11 @@ class ReferenceAnalysisService:
                     match_type="fuzzy",
                     match_score=score / 100.0,  # Convert back to 0-1 scale
                 )
-                self._match_cache[simplified] = result
+                self._match_cache[cache_key] = result
                 return result
 
         # No match found
-        self._match_cache[simplified] = None
+        self._match_cache[cache_key] = None
         return None
 
     def get_combined_frequency(

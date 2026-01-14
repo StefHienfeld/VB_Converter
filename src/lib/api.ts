@@ -136,6 +136,10 @@ export async function startAnalysis(
 export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
   const res = await fetch(`${API_BASE_URL}/api/status/${jobId}`);
 
+  if (res.status === 404) {
+    throw new Error("Job niet gevonden (404) - server mogelijk herstart");
+  }
+  
   if (!res.ok) {
     const detail = await safeParseError(res);
     throw new Error(detail || "Status ophalen mislukt");

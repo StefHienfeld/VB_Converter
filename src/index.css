@@ -344,8 +344,36 @@
     }
   }
 
+  @keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+
+  @keyframes gradient {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+
+  @keyframes shine {
+    0% { transform: translateX(-150%); }
+    100% { transform: translateX(150%); }
+  }
+
   .animate-fade-up {
     animation: fade-up 0.5s ease-out forwards;
+  }
+
+  .animate-shimmer {
+    animation: shimmer 2s ease-in-out infinite;
+  }
+
+  .animate-gradient {
+    animation: gradient 3s ease infinite;
+  }
+
+  .animate-shine {
+    animation: shine 2s ease-in-out infinite;
   }
 
   .animate-shrink-up {

@@ -15,6 +15,7 @@ from ...domain.analysis import AnalysisAdvice, ConfidenceLevel, AdviceCode
 from ...prompts.sanering_prompt import SaneringPrompt, SaneringResult
 from ...prompts.compliance_prompt import CompliancePrompt, ComplianceResult, ComplianceCategory
 from ...prompts.semantic_match_prompt import SemanticMatchPrompt, SemanticMatchResult
+from ...prompts.reflection_prompt import ReflectionPrompt, ReflectionResult
 from ...utils.rate_limiter import BatchProcessor, RetryConfig, RateLimitError, LLMError
 from .rag_service import RAGService
 from ...logging_config import get_logger
@@ -194,10 +195,10 @@ class LLMAnalysisService:
         if self.rag_service and self.rag_service.is_ready():
             context = self.rag_service.get_context_for_analysis(
                 cluster.original_text,
-                top_k=3
+                top_k=20
             )
         elif policy_sections:
-            context = self._format_sections_as_context(policy_sections[:3])
+            context = self._format_sections_as_context(policy_sections[:20])
         
         if not context:
             return self._fallback_advice(cluster, reason="Geen voorwaarden context beschikbaar")
@@ -222,10 +223,149 @@ class LLMAnalysisService:
             compliance_result = self.analyze_compliance(cluster.original_text, context)
             
             return self._compliance_to_advice(compliance_result, cluster)
-            
+
         except Exception as e:
             logger.error(f"LLM analysis failed: {e}")
             return self._fallback_advice(cluster, reason=str(e))
+
+    def verify_analysis(
+        self,
+        clause_text: str,
+        context: str,
+        initial_advice: AnalysisAdvice
+    ) -> ReflectionResult:
+        """
+        Verify an initial analysis using reflection (self-verification).
+
+        This implements the dual-pass verification architecture where
+        the LLM critically reviews its own initial analysis.
+
+        Args:
+            clause_text: Original clause text
+            context: Relevant policy conditions
+            initial_advice: The initial analysis result to verify
+
+        Returns:
+            ReflectionResult with verification outcome
+        """
+        if self.client is None:
+            return ReflectionResult.fallback("No LLM client configured")
+
+        try:
+            messages = ReflectionPrompt.build_messages(
+                clause_text=clause_text,
+                context=context,
+                initial_conclusion=initial_advice.advice_code,
+                initial_reason=initial_advice.reason,
+                initial_confidence=str(initial_advice.confidence),
+                initial_article=initial_advice.reference_article or "-"
+            )
+            response = self._call_llm_chat(messages)
+            return ReflectionResult.from_json(response, raw_response=response)
+        except Exception as e:
+            logger.error(f"Reflection verification failed: {e}")
+            return ReflectionResult.fallback(str(e))
+
+    def analyze_with_reflection(
+        self,
+        cluster: Cluster,
+        policy_sections: Optional[List[PolicyDocumentSection]] = None,
+        reflection_threshold: float = 0.7
+    ) -> AnalysisAdvice:
+        """
+        Analyze a cluster with automatic reflection/self-verification.
+
+        Implements a dual-pass architecture:
+        1. First pass: Standard analysis (sanering + compliance)
+        2. Second pass: Reflection/verification of the initial result
+        3. Decision: Accept, revise, or flag for manual check
+
+        Args:
+            cluster: Cluster to analyze
+            policy_sections: Optional list of relevant policy sections
+            reflection_threshold: Minimum confidence to skip reflection (default 0.7)
+
+        Returns:
+            AnalysisAdvice (potentially revised based on reflection)
+        """
+        if self.client is None:
+            logger.warning("No LLM client configured")
+            return self._fallback_advice(cluster)
+
+        # Get context for analysis
+        context = ""
+        if self.rag_service and self.rag_service.is_ready():
+            context = self.rag_service.get_context_for_analysis(
+                cluster.original_text,
+                top_k=20
+            )
+        elif policy_sections:
+            context = self._format_sections_as_context(policy_sections[:20])
+
+        if not context:
+            return self._fallback_advice(cluster, reason="Geen voorwaarden context beschikbaar")
+
+        # PASS 1: Initial analysis
+        initial_advice = self.analyze_cluster_with_context(cluster, policy_sections)
+
+        # Skip reflection if initial confidence is very high and not high-risk
+        is_high_risk = (
+            initial_advice.advice_code in ["⚠️ CONFLICT", "BEHOUDEN (CLAUSULE)"] or
+            "HOOG RISICO" in initial_advice.reason
+        )
+
+        # Parse confidence from string if needed
+        try:
+            confidence_value = float(initial_advice.confidence) if isinstance(initial_advice.confidence, (int, float)) else 0.5
+        except (ValueError, TypeError):
+            confidence_value = 0.5
+
+        if confidence_value >= reflection_threshold and not is_high_risk:
+            logger.debug(f"Skipping reflection: confidence {confidence_value} >= {reflection_threshold}")
+            return initial_advice
+
+        # PASS 2: Reflection/verification
+        logger.info(f"Running reflection for cluster {cluster.id}")
+        reflection = self.verify_analysis(
+            clause_text=cluster.original_text,
+            context=context,
+            initial_advice=initial_advice
+        )
+
+        # Decision based on reflection
+        if reflection.recommendation == "ACCEPT" and reflection.agrees_with_initial:
+            # Reflection confirms initial analysis
+            logger.debug("Reflection confirms initial analysis")
+            return initial_advice
+
+        elif reflection.recommendation == "REVISE" and reflection.revised_conclusion:
+            # Reflection suggests revision
+            logger.info(f"Reflection suggests revision: {reflection.revised_conclusion}")
+            return AnalysisAdvice(
+                cluster_id=cluster.id,
+                advice_code=AdviceCode.HANDMATIG_CHECKEN.value,
+                reason=f"[HERZIEN] {reflection.revised_conclusion}. Origineel: {initial_advice.reason}",
+                confidence=ConfidenceLevel.MIDDEN.value,
+                reference_article=initial_advice.reference_article,
+                category="REFLECTION_REVISED",
+                cluster_name=cluster.name,
+                frequency=cluster.frequency
+            )
+
+        else:
+            # Reflection uncertain or recommends manual check
+            logger.info("Reflection recommends manual check")
+            issues = reflection.issues_found or "Onzekerheid in analyse"
+            return AnalysisAdvice(
+                cluster_id=cluster.id,
+                advice_code=AdviceCode.HANDMATIG_CHECKEN.value,
+                reason=f"[REFLECTIE] {issues}. Origineel: {initial_advice.reason}",
+                confidence=ConfidenceLevel.LAAG.value,
+                reference_article=initial_advice.reference_article,
+                category="REFLECTION_MANUAL",
+                cluster_name=cluster.name,
+                frequency=cluster.frequency
+            )
     
     def analyze_clusters_batch(
         self,
@@ -270,34 +410,45 @@ class LLMAnalysisService:
         # Convert to dictionary
         return {cluster.id: advice for cluster, advice in zip(clusters, results)}
     
-    def _call_llm_chat(self, messages: List[dict]) -> str:
+    def _call_llm_chat(self, messages: List[dict], force_json: bool = True) -> str:
         """
         Call LLM with chat messages format.
-        
+
         Args:
             messages: List of message dicts with 'role' and 'content'
-            
+            force_json: If True, request JSON output format (reduces parsing errors)
+
         Returns:
             Response text
         """
         # OpenAI-style client
         if hasattr(self.client, 'chat') and hasattr(self.client.chat, 'completions'):
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=messages,
-                temperature=self.temperature
-            )
+            kwargs = {
+                'model': self.model_name,
+                'messages': messages,
+                'temperature': self.temperature
+            }
+
+            # Add JSON mode if supported and requested
+            if force_json:
+                try:
+                    kwargs['response_format'] = {"type": "json_object"}
+                except Exception:
+                    # Some models/providers don't support response_format
+                    logger.debug("JSON mode not supported, using standard response")
+
+            response = self.client.chat.completions.create(**kwargs)
             return response.choices[0].message.content
-        
+
         # Generic client with __call__ (pass as single prompt)
         if callable(self.client):
             # Combine messages into single prompt
             prompt = "\n\n".join([
-                f"{m['role'].upper()}: {m['content']}" 
+                f"{m['role'].upper()}: {m['content']}"
                 for m in messages
             ])
             return self.client(prompt)
-        
+
         raise ValueError("Unsupported LLM client type")
     
     def _compliance_to_advice(

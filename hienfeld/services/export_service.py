@@ -2,7 +2,7 @@
 """
 Service for exporting analysis results to various formats.
 """
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TYPE_CHECKING
 from io import BytesIO
 import pandas as pd
 
@@ -18,6 +18,9 @@ from ..domain.reference import (
     get_comparison_symbol,
 )
 from ..logging_config import get_logger
+
+if TYPE_CHECKING:
+    from .reference_analysis_service import ReferenceAnalysisService
 
 logger = get_logger('export_service')
 
@@ -44,7 +47,8 @@ class ExportService:
         include_original_columns: bool = True,
         original_df: Optional[pd.DataFrame] = None,
         hierarchical_results: Optional[List[Dict]] = None,
-        reference_matches: Optional[Dict[str, ReferenceMatch]] = None
+        reference_matches: Optional[Dict[str, ReferenceMatch]] = None,
+        reference_service: Optional['ReferenceAnalysisService'] = None
     ) -> pd.DataFrame:
         """
         Build a DataFrame with analysis results, supporting hierarchical parent/child structure.
@@ -56,7 +60,8 @@ class ExportService:
             include_original_columns: Whether to include original data columns
             original_df: Original DataFrame (for preserving columns)
             hierarchical_results: Optional list of hierarchical result dicts with 'type' ('PARENT', 'CHILD', 'SINGLE')
-            reference_matches: Optional mapping of simplified_text -> ReferenceMatch for comparison
+            reference_matches: Optional mapping of simplified_text -> ReferenceMatch for comparison (deprecated)
+            reference_service: Optional reference analysis service for per-clause matching (preferred)
 
         Returns:
             DataFrame with analysis results
@@ -91,8 +96,16 @@ class ExportService:
             advice = advice_map.get(cluster_id)
             
             # Get reference match for this clause (if available)
+            # Prefer reference_service (per-clause matching with policy_number support)
             ref_match = None
-            if reference_matches:
+            if reference_service and reference_service.is_loaded:
+                # Use reference service directly - matches on text + policy_number
+                ref_match = reference_service.find_match(
+                    clause.simplified_text,
+                    policy_number=clause.source_policy_number
+                )
+            elif reference_matches:
+                # Backward compatibility: use pre-built dict
                 simplified = clause.simplified_text.lower().strip() if clause.simplified_text else ""
                 ref_match = reference_matches.get(simplified)
 
@@ -110,7 +123,7 @@ class ExportService:
             }
 
             # Add reference columns (if reference analysis was used)
-            if reference_matches is not None:
+            if reference_service or reference_matches is not None:
                 current_advice = advice.advice_code if advice else ""
                 comparison_status = get_comparison_status(current_advice, ref_match)
 
@@ -227,6 +240,11 @@ class ExportService:
         # Apply grouping
         singletons['Cluster_ID'] = singletons.apply(create_unique_cluster_id, axis=1)
         singletons['Cluster_Naam'] = singletons.apply(create_unique_cluster_name, axis=1)
+
+        # IMPORTANT: Preserve original frequency BEFORE overwriting
+        # This is used by reference_analysis_service to get the real frequency (1)
+        # instead of the cluster size (e.g., 625) when loading as reference
+        singletons['Orig. Frequentie'] = singletons['Frequentie'].copy()
 
         # Update Frequentie to reflect group size (per unique cluster)
         unique_cluster_sizes = singletons['Cluster_ID'].value_counts().to_dict()
@@ -499,6 +517,40 @@ class ExportService:
         
         return df
     
+    def _sanitize_for_excel(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Sanitize DataFrame for Excel export by removing illegal characters.
+        
+        openpyxl doesn't allow certain control characters and some Unicode ranges.
+        This function cleans all string columns.
+        """
+        import re
+        
+        # Pattern for illegal Excel characters (control chars except tab, newline, carriage return)
+        # See: https://docs.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/
+        illegal_chars = re.compile(r'[\x00-\x08\x0b-\x0c\x0e-\x1f]')
+        
+        def clean_string(val):
+            if isinstance(val, str):
+                # Remove illegal control characters
+                val = illegal_chars.sub('', val)
+                # Replace problematic Unicode chars with ASCII equivalents
+                val = val.replace('–', '-')  # en-dash
+                val = val.replace('—', '-')  # em-dash
+                val = val.replace(''', "'")  # smart quote
+                val = val.replace(''', "'")  # smart quote
+                val = val.replace('"', '"')  # smart quote
+                val = val.replace('"', '"')  # smart quote
+                val = val.replace('…', '...')  # ellipsis
+            return val
+        
+        # Apply to all object (string) columns
+        df = df.copy()
+        for col in df.select_dtypes(include=['object']).columns:
+            df[col] = df[col].apply(clean_string)
+        
+        return df
+    
     def to_excel_bytes(
         self,
         df: pd.DataFrame,
@@ -521,6 +573,9 @@ class ExportService:
             Excel file as bytes
         """
         output = BytesIO()
+        
+        # Sanitize input DataFrame
+        df = self._sanitize_for_excel(df)
 
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             # Split long texts (>800 characters) into separate sheet
@@ -551,11 +606,13 @@ class ExportService:
             # Optional summary sheet
             if include_summary and clusters and advice_map:
                 summary_df = self.build_cluster_summary(clusters, advice_map)
+                summary_df = self._sanitize_for_excel(summary_df)  # Fix: sanitize summary too
                 summary_df.to_excel(writer, sheet_name='Cluster Samenvatting', index=False)
 
             # Verdwenen Teksten sheet (texts in reference but not in current)
             if gone_texts:
                 gone_df = self._build_gone_texts_dataframe(gone_texts)
+                gone_df = self._sanitize_for_excel(gone_df)  # Fix: sanitize gone texts too
                 gone_df.to_excel(writer, sheet_name='Verdwenen Teksten', index=False)
                 logger.info(f"Verdwenen Teksten sheet: {len(gone_texts)} rows")
 
