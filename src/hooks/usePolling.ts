@@ -5,10 +5,10 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { getJobStatus, getResults, JobStatusResponse, AnalysisResultsResponse } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
+import { POLLING_CONFIG } from "@/lib/constants";
 
-// GEEN timeout - analyses kunnen lang duren, backend bepaalt wanneer job klaar is
-const POLL_INTERVAL = 1500; // 1.5 seconds
-const MAX_RETRIES = 3; // Retry bij netwerk errors
+// Extract polling configuration
+const { INTERVAL_MS: POLL_INTERVAL, MAX_RETRIES, BACKOFF_MULTIPLIER } = POLLING_CONFIG;
 
 export interface UsePollingOptions {
   onProgress?: (status: JobStatusResponse) => void;
@@ -104,7 +104,7 @@ export function usePolling(options: UsePollingOptions = {}): UsePollingReturn {
         if (retryCountRef.current <= MAX_RETRIES) {
           console.warn(`[Polling] Retry ${retryCountRef.current}/${MAX_RETRIES} na error:`, err.message);
           // Wacht iets langer bij retry (exponential backoff)
-          const retryDelay = POLL_INTERVAL * Math.pow(2, retryCountRef.current - 1);
+          const retryDelay = POLL_INTERVAL * Math.pow(BACKOFF_MULTIPLIER, retryCountRef.current - 1);
           timeoutRef.current = setTimeout(() => poll(jobId), retryDelay);
           return;
         }

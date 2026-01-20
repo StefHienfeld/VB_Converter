@@ -1,6 +1,7 @@
 import { AnalysisResultRow } from "@/types/analysis";
+import { API_CONFIG, UI_CONFIG } from "./constants";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const { BASE_URL: API_BASE_URL, DEBUG, TIMEOUT_MS: API_TIMEOUT_MS } = API_CONFIG;
 
 export interface StartAnalysisRequest {
   policyFile: File;
@@ -45,35 +46,46 @@ export interface AnalysisResultsResponse {
   results: AnalysisResultRow[];
 }
 
+/**
+ * Creates a fetch request with timeout support
+ */
+function fetchWithTimeout(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs: number = API_TIMEOUT_MS
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  return fetch(url, {
+    ...options,
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeoutId));
+}
+
 function buildFormData(req: StartAnalysisRequest): FormData {
   const form = new FormData();
-  
+
   // Validate and append policy file
   if (!req.policyFile) {
     throw new Error("Polisbestand ontbreekt");
   }
-  console.log("[FormData] Adding policy file:", req.policyFile.name, req.policyFile.size, "bytes");
   form.append("policy_file", req.policyFile);
-  
+
   // Append conditions files
   const conditionsFiles = req.conditionsFiles || [];
-  console.log("[FormData] Adding", conditionsFiles.length, "conditions files");
-  conditionsFiles.forEach((file, idx) => {
-    console.log(`[FormData]   ${idx + 1}. ${file.name} (${file.size} bytes)`);
+  conditionsFiles.forEach((file) => {
     form.append("conditions_files", file);
   });
-  
+
   // Append clause library files
   const clauseLibraryFiles = req.clauseLibraryFiles || [];
-  console.log("[FormData] Adding", clauseLibraryFiles.length, "clause library files");
-  clauseLibraryFiles.forEach((file, idx) => {
-    console.log(`[FormData]   ${idx + 1}. ${file.name} (${file.size} bytes)`);
+  clauseLibraryFiles.forEach((file) => {
     form.append("clause_library_files", file);
   });
 
   // Append reference file (optional - for yearly vs monthly comparison)
   if (req.referenceFile) {
-    console.log("[FormData] Adding reference file:", req.referenceFile.name, req.referenceFile.size, "bytes");
     form.append("reference_file", req.referenceFile);
   }
 
@@ -86,7 +98,6 @@ function buildFormData(req: StartAnalysisRequest): FormData {
   form.append("analysis_mode", req.settings.analysisMode || "balanced");
   form.append("extra_instruction", req.extraInstruction ?? "");
 
-  console.log("[FormData] FormData built successfully");
   return form;
 }
 
@@ -95,35 +106,31 @@ export async function startAnalysis(
 ): Promise<StartAnalysisResponse> {
   const formData = buildFormData(req);
 
-  // Log upload details for debugging
-  console.log("[API] Starting analysis with:", {
-    policyFile: req.policyFile?.name,
-    policyFileSize: req.policyFile?.size,
-    conditionsFilesCount: req.conditionsFiles?.length ?? 0,
-    clauseLibraryFilesCount: req.clauseLibraryFiles?.length ?? 0,
-    apiUrl: `${API_BASE_URL}/api/analyze`
-  });
-
   try {
-    const res = await fetch(`${API_BASE_URL}/api/analyze`, {
+    const res = await fetchWithTimeout(`${API_BASE_URL}/api/analyze`, {
       method: "POST",
       body: formData,
     });
 
     if (!res.ok) {
       const detail = await safeParseError(res);
-      console.error("[API] Server error:", res.status, detail);
+      if (DEBUG) console.error("[API] Server error:", res.status, detail);
       throw new Error(detail || "Kon analyse niet starten");
     }
 
     const result = (await res.json()) as StartAnalysisResponse;
-    console.log("[API] Analysis started:", result);
     return result;
   } catch (error) {
+    // Handle timeout
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("Request timeout - de server reageert niet");
+    }
     // Enhanced error logging
     if (error instanceof TypeError && error.message.includes("fetch")) {
-      console.error("[API] Network error - could not reach server:", error);
-      console.error("[API] Check if backend is running at:", API_BASE_URL);
+      if (DEBUG) {
+        console.error("[API] Network error - could not reach server:", error);
+        console.error("[API] Check if backend is running at:", API_BASE_URL);
+      }
       throw new Error(
         `Kan geen verbinding maken met de server (${API_BASE_URL}). ` +
         "Controleer of de backend draait."
@@ -134,12 +141,12 @@ export async function startAnalysis(
 }
 
 export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/status/${jobId}`);
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/status/${jobId}`);
 
   if (res.status === 404) {
     throw new Error("Job niet gevonden (404) - server mogelijk herstart");
   }
-  
+
   if (!res.ok) {
     const detail = await safeParseError(res);
     throw new Error(detail || "Status ophalen mislukt");
@@ -149,7 +156,7 @@ export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
 }
 
 export async function getResults(jobId: string): Promise<AnalysisResultsResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/results/${jobId}`);
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/results/${jobId}`);
 
   if (res.status === 202) {
     throw new Error("Resultaten nog niet beschikbaar");
@@ -164,7 +171,7 @@ export async function getResults(jobId: string): Promise<AnalysisResultsResponse
 }
 
 export async function downloadReport(jobId: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/api/report/${jobId}`);
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/report/${jobId}`);
 
   if (!res.ok) {
     const detail = await safeParseError(res);
@@ -175,7 +182,7 @@ export async function downloadReport(jobId: string): Promise<void> {
   const url = window.URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = "Hienfeld_Analyse.xlsx";
+  link.download = UI_CONFIG.DEFAULT_REPORT_FILENAME;
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -193,5 +200,3 @@ async function safeParseError(res: Response): Promise<string | null> {
   }
   return null;
 }
-
-

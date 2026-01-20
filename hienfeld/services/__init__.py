@@ -2,9 +2,8 @@
 from .ingestion_service import IngestionService
 from .preprocessing_service import PreprocessingService
 from .policy_parser_service import PolicyParserService
-from .multi_clause_service import MultiClauseDetectionService
 from .clustering_service import ClusteringService
-from .similarity_service import SimilarityService, RapidFuzzSimilarityService, DifflibSimilarityService
+from .similarity_service import SimilarityService, RapidFuzzSimilarityService
 from .analysis_service import AnalysisService
 from .export_service import ExportService
 from .clause_library_service import ClauseLibraryService
@@ -16,15 +15,22 @@ from .synonym_service import SynonymService
 from .document_similarity_service import DocumentSimilarityService
 from .hybrid_similarity_service import HybridSimilarityService
 
+# Service interfaces (v4.3 - MVC refactoring)
+from .interfaces import (
+    ISimilarityService,
+    IBatchSimilarityService,
+    ISemanticSimilarityService,
+    IAnalysisStrategy,
+    AnalysisContext,
+)
+
 __all__ = [
     'IngestionService',
-    'PreprocessingService', 
+    'PreprocessingService',
     'PolicyParserService',
-    'MultiClauseDetectionService',
     'ClusteringService',
     'SimilarityService',
     'RapidFuzzSimilarityService',
-    'DifflibSimilarityService',
     'AnalysisService',
     'ExportService',
     'ClauseLibraryService',
@@ -34,5 +40,11 @@ __all__ = [
     'SynonymService',
     'DocumentSimilarityService',
     'HybridSimilarityService',
+    # Service interfaces
+    'ISimilarityService',
+    'IBatchSimilarityService',
+    'ISemanticSimilarityService',
+    'IAnalysisStrategy',
+    'AnalysisContext',
 ]
 
