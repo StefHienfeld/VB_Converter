@@ -115,12 +115,21 @@ class ClusteringService:
             }
             logger.debug(f"Pre-computed {len(normalized_texts)} normalized texts")
 
+        import time
+        clustering_start = time.time()
+        fuzzy_comparisons = 0
+
         for i, clause in enumerate(sorted_clauses):
             # Progress update - more frequent updates for better UX
             # Update every 50 items OR every 5% of total (whichever is more frequent)
             update_interval = min(50, max(1, total // 20))
             if progress_callback and i % update_interval == 0:
                 progress_callback(int(i / total * 100))
+
+            # Log timing every 500 clauses
+            if (i + 1) % 500 == 0:
+                elapsed = time.time() - clustering_start
+                logger.info(f"⏱️ CLUSTERING [{i+1}/{total}]: {elapsed:.1f}s, {len(clusters)} clusters, {fuzzy_comparisons} fuzzy comparisons")
             
             text = clause.simplified_text
 
@@ -168,19 +177,25 @@ class ClusteringService:
             
             for cluster in search_window:
                 leader_text = cluster.leader_text
-                
+
                 # Quick length filter (skip if too different)
                 if leader_text:
                     len_diff = abs(len(leader_text) - len(text)) / max(len(leader_text), 1)
                     if len_diff > length_tolerance:
                         continue
-                
+
                 # First try: match on original simplified text
                 similarity = self.similarity_service.similarity(leader_text, text)
+                fuzzy_comparisons += 1
 
                 if similarity >= threshold:
                     found_cluster = cluster
                     break
+
+                # OPTIMIZATION v3.3: Skip normalized check if similarity is very low
+                # If texts are < 50% similar, normalization won't help
+                if similarity < 0.50:
+                    continue
 
                 # Second try: match on normalized text (catches variable differences)
                 # FIXED: Cache leader normalized text to avoid recomputing it 100+ times
@@ -247,7 +262,18 @@ class ClusteringService:
         if progress_callback:
             progress_callback(100)
 
+        clustering_time = time.time() - clustering_start
+        logger.info(f"⏱️ CLUSTERING COMPLETE: {clustering_time:.1f}s for {len(clauses)} clauses -> {len(clusters)} clusters")
+        logger.info(f"   Total fuzzy comparisons: {fuzzy_comparisons} ({fuzzy_comparisons/max(1,len(clauses)):.1f} per clause)")
         logger.info(f"Created {len(clusters)} clusters from {len(clauses)} clauses")
+
+        # Log cache effectiveness (v3.3)
+        exact_hits = sum(1 for c in clauses if c.simplified_text in exact_match_cache)
+        normalized_hits = sum(1 for c in clauses if normalize_for_clustering(c.raw_text) in normalized_match_cache) - exact_hits
+        logger.info(
+            f"🚀 Clustering cache hits: {len(exact_match_cache)} exact, "
+            f"{len(normalized_match_cache)} normalized"
+        )
 
         # POST-PROCESSING: Group singleton clusters (frequency=1) into "Uniek" meta-clusters
         # This will be done AFTER analysis, so we preserve individual analysis but group for display

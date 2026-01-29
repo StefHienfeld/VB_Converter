@@ -379,7 +379,7 @@ class AnalysisService:
         
         advice_map: Dict[str, AnalysisAdvice] = {}
         total = len(clusters)
-        
+
         # Track statistics per step
         stats = {
             'step0_admin_issues': 0,
@@ -390,22 +390,44 @@ class AnalysisService:
             'step3_fallback': 0,
             'multi_clause': 0
         }
-        
+
+        # TIMING: Track time per phase
+        import time
+        analysis_start = time.time()
+        step_times = {'step0': 0.0, 'step05': 0.0, 'step1': 0.0, 'step2': 0.0, 'step3': 0.0}
+
         for i, cluster in enumerate(clusters):
             # Progress update
             if progress_callback and i % 20 == 0:
                 progress_callback(int(i / total * 100))
-            
-            advice = self._analyze_with_waterfall(cluster, stats)
+
+            advice = self._analyze_with_waterfall(cluster, stats, step_times)
             advice_map[cluster.id] = advice
-        
+
+            # Log timing every 100 clusters
+            if (i + 1) % 100 == 0:
+                elapsed = time.time() - analysis_start
+                avg_per_cluster = elapsed / (i + 1)
+                remaining = avg_per_cluster * (total - i - 1)
+                logger.info(f"⏱️ TIMING [{i+1}/{total}]: {elapsed:.1f}s elapsed, ~{remaining:.1f}s remaining")
+                logger.info(f"   Step times: s0={step_times['step0']:.1f}s, s0.5={step_times['step05']:.1f}s, s1={step_times['step1']:.1f}s, s2={step_times['step2']:.1f}s, s3={step_times['step3']:.1f}s")
+
         # Final progress
         if progress_callback:
             progress_callback(100)
-        
+
+        # Log final timing summary
+        total_time = time.time() - analysis_start
+        logger.info(f"⏱️ ANALYSIS COMPLETE: {total_time:.1f}s for {total} clusters ({total_time/total*1000:.1f}ms/cluster)")
+        logger.info(f"   STEP BREAKDOWN: Step0={step_times['step0']:.1f}s, Step0.5={step_times['step05']:.1f}s, Step1={step_times['step1']:.1f}s, Step2={step_times['step2']:.1f}s, Step3={step_times['step3']:.1f}s")
+
         # Log summary
         self._log_analysis_summary(advice_map, stats)
-        
+
+        # Log performance stats (v3.3)
+        if self._hybrid_enabled and hasattr(self.hybrid_similarity_service, 'log_performance_summary'):
+            self.hybrid_similarity_service.log_performance_summary()
+
         return advice_map
     
     def analyze_text_segment(
@@ -466,44 +488,53 @@ class AnalysisService:
         return self._analyze_with_waterfall(temp_cluster, stats)
     
     def _analyze_with_waterfall(
-        self, 
+        self,
         cluster: Cluster,
-        stats: dict
+        stats: dict,
+        step_times: dict = None
     ) -> AnalysisAdvice:
         """
         Analyze a single cluster using the 4-step waterfall pipeline.
-        
+
         Args:
             cluster: Cluster to analyze
             stats: Statistics dictionary to update
-            
+            step_times: Optional timing dictionary to track time per step
+
         Returns:
             AnalysisAdvice for this cluster
         """
+        import time
         text = cluster.original_text
         simple_text = cluster.leader_text
         frequency = cluster.frequency
-        
+
         # ============================================================
         # STEP 0: ADMIN CHECK (Hygiene issues)
         # Checks: empty, placeholders, dates in past, encoding issues
         # ============================================================
+        t0 = time.time()
         if self.admin_check_service:
             admin_result, admin_advice = self.admin_check_service.check_cluster(cluster)
             if admin_advice:
                 stats['step0_admin_issues'] += 1
+                if step_times: step_times['step0'] += time.time() - t0
                 logger.debug(f"Step 0 hit: {admin_advice.advice_code} for cluster {cluster.id}")
                 return admin_advice
-        
+        if step_times: step_times['step0'] += time.time() - t0
+
         # ============================================================
         # STEP 0.5: CUSTOM INSTRUCTIONS CHECK (User-defined rules)
         # Matches input text against user-provided instructions semantically
         # ============================================================
+        t05 = time.time()
         custom_advice = self._step05_custom_instructions_check(cluster)
         if custom_advice:
             stats['step05_custom_instructions'] += 1
+            if step_times: step_times['step05'] += time.time() - t05
             return custom_advice
-        
+        if step_times: step_times['step05'] += time.time() - t05
+
         # ============================================================
         # PRE-CHECK: Skip very short texts
         # (Note: this is also checked by AdminCheckService, but kept as fallback)
@@ -519,7 +550,7 @@ class AnalysisService:
                 cluster_name=cluster.name,
                 frequency=frequency
             )
-        
+
         # ============================================================
         # PRE-CHECK: Text length check (NEW - simplified)
         # If text is too long, flag for manual check (no automatic splitting)
@@ -535,31 +566,40 @@ class AnalysisService:
                 cluster_name=cluster.name,
                 frequency=frequency
             )
-        
+
         # ============================================================
         # STEP 1: CLAUSE LIBRARY CHECK
         # Check if text matches a standard clause -> REPLACE
         # ============================================================
+        t1 = time.time()
         library_advice = self._step1_clause_library_check(cluster)
         if library_advice:
             stats['step1_library_match'] += 1
+            if step_times: step_times['step1'] += time.time() - t1
             return library_advice
-        
+        if step_times: step_times['step1'] += time.time() - t1
+
         # ============================================================
         # STEP 2: POLICY CONDITIONS CHECK
         # Check if text is covered by conditions -> DELETE
         # ============================================================
+        t2 = time.time()
         conditions_advice = self._step2_conditions_check(cluster)
         if conditions_advice:
             stats['step2_conditions_match'] += 1
+            if step_times: step_times['step2'] += time.time() - t2
             return conditions_advice
+        if step_times: step_times['step2'] += time.time() - t2
         
         # ============================================================
         # STEP 3: FALLBACK ANALYSIS
         # Keyword rules, frequency, or AI analysis
         # ============================================================
+        t3 = time.time()
         stats['step3_fallback'] += 1
-        return self._step3_fallback_analysis(cluster)
+        result = self._step3_fallback_analysis(cluster)
+        if step_times: step_times['step3'] += time.time() - t3
+        return result
     
     def _step05_custom_instructions_check(self, cluster: Cluster) -> Optional[AnalysisAdvice]:
         """
@@ -1069,25 +1109,35 @@ class AnalysisService:
             return None
 
         # FALLBACK: Loop-based RapidFuzz matching (when hybrid not available)
-        best_score = 0.0
-        best_section = None
+        # OPTIMIZED v3.3: Two-stage filtering for faster matching
+        PRE_SCREEN_THRESHOLD = 0.40
+        TOP_CANDIDATES = 10
 
-        for section in self._policy_sections:
+        # Stage 1: Quick pre-screening
+        pre_scores = []
+        for idx, section in enumerate(self._policy_sections):
             if not section.simplified_text:
                 continue
 
-            score = self.similarity_service.similarity(text, section.simplified_text)
-
-            if score > best_score:
-                best_score = score
-                best_section = section
-
-            # Also check substring match
+            # Check substring match first (instant match)
             if text in section.simplified_text:
                 substring_score = min(1.0, 0.95 + (len(text) / len(section.simplified_text)) * 0.05)
-                if substring_score > best_score:
-                    best_score = substring_score
-                    best_section = section
+                return (substring_score, section)
+
+            # Quick RapidFuzz score
+            score = self.similarity_service.similarity(text, section.simplified_text)
+            if score >= PRE_SCREEN_THRESHOLD:
+                pre_scores.append((idx, score, section))
+
+        if not pre_scores:
+            return None
+
+        # Sort and take top candidates
+        pre_scores.sort(key=lambda x: x[1], reverse=True)
+        top_candidates = pre_scores[:TOP_CANDIDATES]
+
+        # Stage 2: Find best among top candidates (already computed)
+        best_idx, best_score, best_section = top_candidates[0]
 
         if best_section and best_score >= self.MEDIUM_SIMILARITY_THRESHOLD:
             return (best_score, best_section)

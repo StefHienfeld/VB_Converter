@@ -52,6 +52,7 @@ class ReferenceAnalysisService:
         'reason': ['Reden', 'reden', 'Reason', 'reason'],
         'article': ['Artikel', 'artikel', 'Article', 'article'],
         'policy_number': ['Polisnummer', 'polisnummer', 'Polis', 'polis', 'Policy', 'policy', 'PolicyNumber'],
+        'status': ['Status', 'status', 'Actie Gedaan', 'ActieGedaan'],
     }
 
     def __init__(
@@ -129,6 +130,7 @@ class ReferenceAnalysisService:
             article_col = self._find_column(df, 'article')
             policy_col = self._find_column(df, 'policy_number')
             orig_freq_col = self._find_column(df, 'orig_frequency')
+            status_col = self._find_column(df, 'status')
 
             if policy_col:
                 logger.info(f"Found policy number column: {policy_col}")
@@ -188,6 +190,7 @@ class ReferenceAnalysisService:
                     reason=str(row.get(reason_col, "")).strip() if reason_col else "",
                     reference_article=str(row.get(article_col, "")).strip() if article_col else "",
                     policy_number=policy_number,
+                    status=str(row.get(status_col, "")).strip() if status_col else "",
                 )
                 clauses.append(clause)
 

@@ -24,20 +24,44 @@ if TYPE_CHECKING:
 
 logger = get_logger('export_service')
 
+# Indicators that mark an action as completed
+DONE_INDICATORS = ['ja', 'yes', 'gedaan', 'done', 'x', '✓', '✅', 'afgerond', 'klaar']
+
 
 class ExportService:
     """
     Handles export of analysis results to Excel and other formats.
     """
-    
+
     def __init__(self, config: AppConfig):
         """
         Initialize the export service.
-        
+
         Args:
             config: Application configuration
         """
         self.config = config
+
+    def _determine_action_status(self, ref_match: Optional[ReferenceMatch]) -> str:
+        """
+        Bepaal de actie status op basis van de referentie match.
+
+        Args:
+            ref_match: Optional reference match from previous analysis
+
+        Returns:
+            Status string: "🆕 Nieuw", "✅ Afgerond", or "🔲 Open"
+        """
+        if ref_match is None:
+            return "🆕 Nieuw"
+
+        ref_status = (ref_match.reference_clause.status or "").strip().lower()
+
+        # Check if the action is marked as completed
+        if any(indicator in ref_status for indicator in DONE_INDICATORS):
+            return "✅ Afgerond"
+
+        return "🔲 Open"
     
     def build_results_dataframe(
         self,
@@ -127,8 +151,10 @@ class ExportService:
                 current_advice = advice.advice_code if advice else ""
                 comparison_status = get_comparison_status(current_advice, ref_match)
 
+                row['Actie Status'] = self._determine_action_status(ref_match)
                 row['Ref. Frequentie'] = ref_match.reference_clause.frequency if ref_match else ''
                 row['Ref. Advies'] = ref_match.reference_clause.advice_code if ref_match else ''
+                row['Ref. Status'] = ref_match.reference_clause.status if ref_match else ''
                 row['Vergelijking'] = get_comparison_symbol(comparison_status)
 
             # Add text column
@@ -643,6 +669,7 @@ class ExportService:
                 'Cluster_Naam': clause.cluster_name,
                 'Ref. Frequentie': clause.frequency,
                 'Ref. Advies': clause.advice_code,
+                'Ref. Status': clause.status,
                 'Ref. Vertrouwen': clause.confidence,
                 'Tekst': clause.text[:500] + '...' if len(clause.text) > 500 else clause.text,
                 'Opmerking': 'Niet meer aanwezig in huidige data',

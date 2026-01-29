@@ -55,6 +55,7 @@ class ReferenceClause:
     reason: str = ""
     reference_article: str = ""
     policy_number: str = ""
+    status: str = ""  # Status kolom van jaaranalyse (bijv. "Gedaan", "X", "✓")
     is_matched: bool = False
 
     def mark_matched(self) -> None:

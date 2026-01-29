@@ -56,6 +56,9 @@ export const ResultsTable = ({ data, className }: ResultsTableProps) => {
               <th className="px-6 py-4 text-center text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Vertrouwen
               </th>
+              <th className="px-6 py-4 text-center text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Status
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border/50">
@@ -103,6 +106,25 @@ export const ResultsTable = ({ data, className }: ResultsTableProps) => {
                     >
                       {row.confidence}
                     </span>
+                  </td>
+                  <td className="px-6 py-4 text-center">
+                    {row.action_status ? (
+                      <span
+                        className={cn(
+                          "text-sm font-medium px-2 py-1 rounded",
+                          row.action_status.includes("Afgerond") &&
+                            "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+                          row.action_status.includes("Open") &&
+                            "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400",
+                          row.action_status.includes("Nieuw") &&
+                            "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                        )}
+                      >
+                        {row.action_status}
+                      </span>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">-</span>
+                    )}
                   </td>
                 </tr>
               );

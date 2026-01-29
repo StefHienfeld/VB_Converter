@@ -9,7 +9,7 @@ from enum import Enum
 import os
 
 
-class AnalysisMode(Enum):
+class AnalysisMode(str, Enum):
     """
     Analysis speed modes with different model and optimization settings.
 
@@ -27,19 +27,11 @@ class ClusteringConfig:
     """Configuration for the clustering algorithm."""
     min_text_length: int = 5
     similarity_threshold: float = 0.90
-    leader_window_size: int = 100
+    leader_window_size: int = 40  # OPTIMIZED: 60% fewer comparisons (was 100)
     use_rapidfuzz: bool = True
     
     # Length-based filtering
     length_tolerance: float = 0.2  # 20% length difference allowed
-
-
-@dataclass
-class MultiClauseConfig:
-    """Configuration for multi-clause detection."""
-    max_text_length: int = 1000
-    clause_code_pattern: str = r'\b[0-9][A-Z]{2}[0-9]\b'  # Matches 9NX3 format
-    min_codes_for_split: int = 2
 
 
 @dataclass
@@ -383,7 +375,7 @@ class SemanticConfig:
             enable_nlp=True,
             enable_tfidf=True,
             enable_synonyms=True,
-            skip_embeddings_threshold=0.92,  # OPTIMIZED: Only use embeddings for tricky cases (was 0.85)
+            skip_embeddings_threshold=0.80,  # OPTIMIZED: Skip embeddings when RapidFuzz >80% (was 0.92)
             batch_embeddings=True,
             use_embedding_cache=True,
             cache_size=5000,
@@ -468,7 +460,6 @@ class AIConfig:
 class AppConfig:
     """Main application configuration combining all sub-configs."""
     clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
-    multi_clause: MultiClauseConfig = field(default_factory=MultiClauseConfig)
     analysis_rules: AnalysisRuleConfig = field(default_factory=AnalysisRuleConfig)
     cluster_naming: ClusterNamingConfig = field(default_factory=ClusterNamingConfig)
     ingestion: IngestionConfig = field(default_factory=IngestionConfig)

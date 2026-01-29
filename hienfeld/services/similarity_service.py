@@ -1,7 +1,7 @@
 # hienfeld/services/similarity_service.py
 """
 Service for computing text similarity.
-Provides multiple implementations (RapidFuzz, difflib, MinHash, Semantic).
+Provides multiple implementations (RapidFuzz, difflib, Semantic).
 """
 from typing import Protocol, Optional, List, Tuple, Dict, Any
 from abc import ABC, abstractmethod
@@ -141,113 +141,6 @@ class RapidFuzzSimilarityService:
     def using_rapidfuzz(self) -> bool:
         """Check if RapidFuzz is being used."""
         return self._use_rapidfuzz
-
-
-class MinHashLSHSimilarityService:
-    """
-    Similarity service using MinHash LSH for near-duplicate detection.
-    
-    Excellent for very large datasets where O(n²) comparison is prohibitive.
-    Requires datasketch library.
-    """
-    
-    def __init__(
-        self, 
-        threshold: float = 0.9,
-        num_perm: int = 128,
-        shingle_size: int = 3
-    ):
-        """
-        Initialize MinHash LSH service.
-        
-        Args:
-            threshold: Jaccard similarity threshold
-            num_perm: Number of permutations for MinHash
-            shingle_size: Size of character n-grams
-        """
-        self.threshold = threshold
-        self.num_perm = num_perm
-        self.shingle_size = shingle_size
-        self._available = False
-        
-        try:
-            from datasketch import MinHash, MinHashLSH
-            self._MinHash = MinHash
-            self._MinHashLSH = MinHashLSH
-            self._available = True
-            self._lsh = None
-            self._minhashes = {}
-        except ImportError:
-            pass
-    
-    def _create_minhash(self, text: str):
-        """Create MinHash for a text string."""
-        if not self._available:
-            return None
-        
-        m = self._MinHash(num_perm=self.num_perm)
-        # Create shingles
-        for i in range(len(text) - self.shingle_size + 1):
-            shingle = text[i:i + self.shingle_size]
-            m.update(shingle.encode('utf-8'))
-        return m
-    
-    def build_index(self, texts: dict) -> None:
-        """
-        Build LSH index from a dictionary of texts.
-        
-        Args:
-            texts: Dictionary mapping id -> text
-        """
-        if not self._available:
-            return
-        
-        self._lsh = self._MinHashLSH(threshold=self.threshold, num_perm=self.num_perm)
-        self._minhashes = {}
-        
-        for text_id, text in texts.items():
-            mh = self._create_minhash(text)
-            self._minhashes[text_id] = mh
-            self._lsh.insert(text_id, mh)
-    
-    def query_similar(self, text: str) -> list:
-        """
-        Find similar texts from the index.
-        
-        Args:
-            text: Query text
-            
-        Returns:
-            List of similar text IDs
-        """
-        if not self._available or self._lsh is None:
-            return []
-        
-        mh = self._create_minhash(text)
-        return self._lsh.query(mh)
-    
-    def similarity(self, a: str, b: str) -> float:
-        """
-        Compute Jaccard similarity estimate between two strings.
-        
-        Args:
-            a: First string
-            b: Second string
-            
-        Returns:
-            Estimated Jaccard similarity
-        """
-        if not self._available:
-            return 0.0
-        
-        mh_a = self._create_minhash(a)
-        mh_b = self._create_minhash(b)
-        return mh_a.jaccard(mh_b)
-    
-    @property
-    def is_available(self) -> bool:
-        """Check if MinHash LSH is available."""
-        return self._available
 
 
 @dataclass
@@ -610,19 +503,17 @@ def create_similarity_service(
 ) -> SimilarityService:
     """
     Factory function to create appropriate similarity service.
-    
+
     Args:
-        method: "rapidfuzz", "difflib", "minhash", or "semantic"
+        method: "rapidfuzz", "difflib", or "semantic"
         threshold: Similarity threshold
         **kwargs: Additional arguments for specific services
-        
+
     Returns:
         SimilarityService instance
     """
     if method == "semantic":
         return SemanticSimilarityService(threshold=threshold, **kwargs)
-    elif method == "minhash":
-        return MinHashLSHSimilarityService(threshold=threshold, **kwargs)
     elif method == "rapidfuzz":
         return RapidFuzzSimilarityService(threshold=threshold)
     else:

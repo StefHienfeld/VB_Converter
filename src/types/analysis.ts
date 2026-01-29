@@ -19,6 +19,7 @@ export interface AnalysisResultRow {
   original_text: string;
   row_type: "SINGLE" | "PARENT" | "CHILD" | string;
   parent_id?: string;
+  action_status?: string;  // "✅ Afgerond", "🔲 Open", "🆕 Nieuw"
 }
 
 

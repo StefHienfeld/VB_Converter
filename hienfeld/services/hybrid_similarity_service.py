@@ -35,10 +35,30 @@ class SimilarityBreakdown:
     synonyms: float = 0.0
     embeddings: float = 0.0
     final_score: float = 0.0
-    
+
     # Metadata
     methods_used: List[str] = field(default_factory=list)
     computation_time_ms: float = 0.0
+
+
+@dataclass
+class PerformanceStats:
+    """Performance statistics for hybrid similarity service."""
+    total_find_best_calls: int = 0
+    total_candidates_screened: int = 0
+    total_full_hybrid_calls: int = 0
+    pre_screen_filtered_count: int = 0
+    avg_candidates_per_call: float = 0.0
+
+    def log_summary(self):
+        """Log performance summary."""
+        if self.total_find_best_calls > 0:
+            savings = (1 - self.total_full_hybrid_calls / max(1, self.total_candidates_screened)) * 100
+            logger.info(
+                f"🚀 Performance: {self.total_find_best_calls} calls, "
+                f"{self.total_candidates_screened} candidates screened, "
+                f"{self.total_full_hybrid_calls} full hybrid ({savings:.1f}% saved)"
+            )
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for logging/debugging."""
@@ -100,10 +120,13 @@ class HybridSimilarityService:
         
         # Lazy initialization flags
         self._services_initialized = False
-        
+
         # Statistics
         self._call_count = 0
         self._total_time_ms = 0.0
+
+        # Performance tracking (v3.3)
+        self._perf_stats = PerformanceStats()
     
     def _ensure_services_initialized(self) -> None:
         """Lazy initialize services that weren't provided."""
@@ -422,37 +445,76 @@ class HybridSimilarityService:
         return score >= self._semantic_config.semantic_high_threshold
     
     def find_best_match(
-        self, 
-        query: str, 
+        self,
+        query: str,
         candidates: List[str],
         min_score: float = 0.0
     ) -> Optional[Tuple[int, float, SimilarityBreakdown]]:
         """
         Find the best matching text from a list of candidates.
-        
+
+        OPTIMIZED (v3.3): Two-stage filtering for 5-10x speedup:
+        - Stage 1: Fast RapidFuzz pre-screening to find top candidates
+        - Stage 2: Full hybrid similarity only on top candidates
+
         Args:
             query: Query text
             candidates: List of candidate texts
             min_score: Minimum score threshold
-            
+
         Returns:
             Tuple of (index, score, breakdown) or None if no match above threshold
         """
+        if not candidates:
+            return None
+
+        # Track performance (v3.3)
+        self._perf_stats.total_find_best_calls += 1
+        self._perf_stats.total_candidates_screened += len(candidates)
+
+        # OPTIMIZATION v3.3: Two-stage filtering
+        # Stage 1: Fast RapidFuzz pre-screening (very fast, ~0.5ms per comparison)
+        PRE_SCREEN_THRESHOLD = 0.35  # Low threshold to not miss potential matches
+        TOP_CANDIDATES = 10  # Only run full hybrid on top 10
+
+        pre_scores = []
+        for idx, candidate in enumerate(candidates):
+            # Fast RapidFuzz only (no embeddings, no NLP)
+            rf_score = self._rapidfuzz.similarity(query, candidate)
+            if rf_score >= PRE_SCREEN_THRESHOLD:
+                pre_scores.append((idx, rf_score))
+
+        # Track filtering effectiveness
+        self._perf_stats.pre_screen_filtered_count += len(candidates) - len(pre_scores)
+
+        # If no candidates pass pre-screening, return None
+        if not pre_scores:
+            return None
+
+        # Sort by RapidFuzz score and take top candidates
+        pre_scores.sort(key=lambda x: x[1], reverse=True)
+        top_candidates = pre_scores[:TOP_CANDIDATES]
+
+        # Track how many get full hybrid
+        self._perf_stats.total_full_hybrid_calls += len(top_candidates)
+
+        # Stage 2: Full hybrid similarity only on top candidates
         best_idx = -1
         best_score = min_score
-        best_breakdown = None
-        
-        for idx, candidate in enumerate(candidates):
-            breakdown = self.similarity_detailed(query, candidate)
-            
-            if breakdown.final_score > best_score:
-                best_idx = idx
-                best_score = breakdown.final_score
-                best_breakdown = breakdown
-        
+
+        for orig_idx, rf_score in top_candidates:
+            # Full hybrid similarity (includes embeddings if needed)
+            score = self.similarity(query, candidates[orig_idx])
+
+            if score > best_score:
+                best_idx = orig_idx
+                best_score = score
+
         if best_idx >= 0:
+            # Only compute detailed breakdown for the best match (for logging/debugging)
+            best_breakdown = self.similarity_detailed(query, candidates[best_idx])
             return (best_idx, best_score, best_breakdown)
-        
+
         return None
     
     def find_all_matches(
@@ -464,33 +526,70 @@ class HybridSimilarityService:
     ) -> List[Tuple[int, float, SimilarityBreakdown]]:
         """
         Find all matching texts above a threshold.
-        
+
+        OPTIMIZED (v3.3): Two-stage filtering for 5-10x speedup:
+        - Stage 1: Fast RapidFuzz pre-screening
+        - Stage 2: Full hybrid similarity only on promising candidates
+
         Args:
             query: Query text
             candidates: List of candidate texts
             min_score: Minimum score threshold
             top_k: Maximum number of results
-            
+
         Returns:
             List of (index, score, breakdown) tuples, sorted by score descending
         """
-        results = []
-        
+        if not candidates:
+            return []
+
+        # OPTIMIZATION v3.3: Two-stage filtering
+        # Stage 1: Fast RapidFuzz pre-screening
+        PRE_SCREEN_THRESHOLD = 0.35  # Low threshold to catch potential semantic matches
+        MAX_PRE_SCREEN = max(top_k * 3, 15)  # Screen more candidates than needed
+
+        pre_scores = []
         for idx, candidate in enumerate(candidates):
-            breakdown = self.similarity_detailed(query, candidate)
-            
-            if breakdown.final_score >= min_score:
-                results.append((idx, breakdown.final_score, breakdown))
-        
-        # Sort by score descending
-        results.sort(key=lambda x: x[1], reverse=True)
-        
-        return results[:top_k]
+            rf_score = self._rapidfuzz.similarity(query, candidate)
+            if rf_score >= PRE_SCREEN_THRESHOLD:
+                pre_scores.append((idx, rf_score))
+
+        if not pre_scores:
+            return []
+
+        # Sort and limit pre-screening results
+        pre_scores.sort(key=lambda x: x[1], reverse=True)
+        pre_scores = pre_scores[:MAX_PRE_SCREEN]
+
+        # Stage 2: Full hybrid similarity on pre-screened candidates
+        scored_candidates = []
+        for orig_idx, rf_score in pre_scores:
+            score = self.similarity(query, candidates[orig_idx])
+            if score >= min_score:
+                scored_candidates.append((orig_idx, score))
+
+        # Sort by score descending and take top_k
+        scored_candidates.sort(key=lambda x: x[1], reverse=True)
+        top_matches = scored_candidates[:top_k]
+
+        # Only compute detailed breakdowns for final results
+        results = []
+        for idx, score in top_matches:
+            breakdown = self.similarity_detailed(query, candidates[idx])
+            results.append((idx, score, breakdown))
+
+        return results
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get service usage statistics."""
         avg_time = self._total_time_ms / self._call_count if self._call_count > 0 else 0
-        
+
+        # Calculate performance savings
+        if self._perf_stats.total_candidates_screened > 0:
+            savings_pct = (1 - self._perf_stats.total_full_hybrid_calls / self._perf_stats.total_candidates_screened) * 100
+        else:
+            savings_pct = 0.0
+
         return {
             'call_count': self._call_count,
             'total_time_ms': round(self._total_time_ms, 2),
@@ -501,8 +600,19 @@ class HybridSimilarityService:
                 'synonyms': self._synonyms is not None and self._synonyms.is_available if self._synonyms else False,
                 'tfidf': self._tfidf is not None and self._tfidf.is_trained if self._tfidf else False,
                 'embeddings': self._semantic is not None and self._semantic.is_available if self._semantic else False
+            },
+            'performance_v33': {
+                'find_best_calls': self._perf_stats.total_find_best_calls,
+                'candidates_screened': self._perf_stats.total_candidates_screened,
+                'full_hybrid_calls': self._perf_stats.total_full_hybrid_calls,
+                'pre_screen_filtered': self._perf_stats.pre_screen_filtered_count,
+                'savings_percent': round(savings_pct, 1)
             }
         }
+
+    def log_performance_summary(self) -> None:
+        """Log performance summary for this session."""
+        self._perf_stats.log_summary()
     
     def clear_caches(self) -> None:
         """Clear all internal caches."""

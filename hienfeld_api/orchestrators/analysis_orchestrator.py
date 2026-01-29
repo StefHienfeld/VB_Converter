@@ -484,6 +484,22 @@ class AnalysisOrchestrator:
                 else cluster.original_text
             )
 
+            # Determine action_status from reference match (if available)
+            action_status = None
+            if container.reference and container.reference.is_loaded:
+                # Get reference match for cluster leader text
+                leader_text = cluster.leader_clause.simplified_text if cluster.leader_clause else ""
+                ref_match = container.reference.find_match(leader_text)
+                if ref_match is None:
+                    action_status = "🆕 Nieuw"
+                else:
+                    ref_status = (ref_match.reference_clause.status or "").strip().lower()
+                    done_indicators = ['ja', 'yes', 'gedaan', 'done', 'x', '✓', '✅', 'afgerond', 'klaar']
+                    if any(indicator in ref_status for indicator in done_indicators):
+                        action_status = "✅ Afgerond"
+                    else:
+                        action_status = "🔲 Open"
+
             row = {
                 "cluster_id": cluster.id,
                 "cluster_name": cluster.name,
@@ -495,6 +511,7 @@ class AnalysisOrchestrator:
                 "original_text": text_content,
                 "row_type": "SINGLE",
                 "parent_id": None,
+                "action_status": action_status,
             }
             result_rows.append(row)
 

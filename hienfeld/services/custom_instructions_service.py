@@ -324,47 +324,39 @@ class CustomInstructionsService:
     def load_instructions(self, raw_text: str) -> int:
         """
         Parse and load instructions for matching.
-        
+
         Args:
             raw_text: Raw instruction text from user
-            
+
         Returns:
             Number of instructions loaded
         """
-        logger.info("=" * 60)
-        logger.info("CUSTOM INSTRUCTIONS LADEN")
-        logger.info("=" * 60)
-        logger.info(f"Raw input length: {len(raw_text)} characters")
-        logger.info(f"Raw input (first 200 chars): {raw_text[:200]}")
-        
         self._instructions = self.parse_instructions(raw_text)
         self._indexed = False
-        
-        logger.info(f"✅ Parsed {len(self._instructions)} custom instructions")
-        
-        # Log each instruction for debugging
+
+        # Summary log only
+        logger.info(f"✅ Custom instructions loaded: {len(self._instructions)} regels")
+
+        # Detailed logging at debug level
+        logger.debug(f"Raw input length: {len(raw_text)} characters")
         for i, instr in enumerate(self._instructions, 1):
-            logger.info(f"  Instruction {i}:")
-            logger.info(f"    Search text: '{instr.search_text}' (length: {len(instr.search_text)})")
-            logger.info(f"    Action: '{instr.action}' (length: {len(instr.action)})")
-            
+            logger.debug(f"  Instruction {i}: '{instr.search_text}' -> '{instr.action}'")
+
             # Warn if search text is very short (might be a typo)
             if len(instr.search_text) < 5:
                 logger.warning(f"    ⚠️  Search text is very short - check for typos!")
-            
+
             # Warn if action is very short (might be incomplete)
             if len(instr.action) < 10:
                 logger.warning(f"    ⚠️  Action is very short - might be incomplete!")
-        
+
         # Index for semantic search if service is available
         if self._semantic_service and self._instructions:
             self._index_for_semantic_search()
-        
+
         if len(self._instructions) == 0:
             logger.warning("⚠️ No instructions loaded - parsing may have failed!")
-        
-        logger.info("=" * 60)
-        
+
         return len(self._instructions)
     
     def _index_for_semantic_search(self) -> None:
@@ -425,53 +417,35 @@ class CustomInstructionsService:
         
         input_text = input_text.strip()
         input_norm = input_text.casefold()
-        
-        logger.info(f"🔍 Matching against {len(self._instructions)} instructions")
-        logger.info(f"   Input text (first 150 chars): '{input_text[:150]}...'")
-        logger.info(f"   Input text length: {len(input_text)} chars")
+
+        logger.debug(f"🔍 Matching against {len(self._instructions)} instructions")
+        logger.debug(f"   Input text (first 150 chars): '{input_text[:150]}...'")
 
         # Fast path: simple "contains" match (customer-friendly grid use-case)
         # If the instruction search_text is literally contained in the clause text,
         # treat it as a perfect hit and skip heavier similarity logic.
-        logger.info("📌 Starting CONTAINS check...")
         for i, instr in enumerate(self._instructions, 1):
             try:
                 needle = (instr.search_text or "").strip()
                 needle_norm = needle.casefold()
-                
-                logger.info(f"   Instruction {i}: search='{needle}' (len={len(needle)}, normalized='{needle_norm}')")
-                
+
                 if not needle:
-                    logger.info(f"   ❌ Skipped (empty search text)")
                     continue
-                
+
                 # Check if needle is in input (case-insensitive)
-                found = needle_norm in input_norm
-                logger.info(f"   Contains check: '{needle_norm}' in input? {found}")
-                
-                if found:
-                    # Show where it was found for debugging
-                    idx = input_norm.find(needle_norm)
-                    context_start = max(0, idx - 30)
-                    context_end = min(len(input_norm), idx + len(needle_norm) + 30)
-                    context = input_norm[context_start:context_end]
-                    logger.info(f"   ✅ Found at position {idx}: '...{context}...'")
-                    
+                if needle_norm in input_norm:
                     best_match = CustomInstructionMatch(
                         instruction=instr,
                         score=1.0,
                         matched_text=input_text
                     )
-                    logger.info(
+                    logger.debug(
                         f"✅ Custom instruction match (contains): '{input_text[:50]}...' -> "
                         f"'{instr.action}' (matched: '{needle}')"
                     )
                     return best_match
-                else:
-                    logger.warning(f"   ❌ '{needle_norm}' NOT found in input text")
-                    logger.info(f"      Input normalized (first 200 chars): '{input_norm[:200]}...'")
             except Exception as e:
-                logger.warning(f"Contains match error for instruction {i}: {e}", exc_info=True)
+                logger.debug(f"Contains match error for instruction {i}: {e}")
 
         best_match: Optional[CustomInstructionMatch] = None
         best_score = 0.0
@@ -504,16 +478,13 @@ class CustomInstructionsService:
                 best_match = match
         
         if best_match:
-            logger.info(
+            logger.debug(
                 f"✅ Custom instruction match (fuzzy/semantic): '{input_text[:50]}...' -> "
                 f"'{best_match.instruction.action}' (score: {best_match.score:.2f})"
             )
         else:
-            logger.warning(
-                f"❌ NO MATCH found for: '{input_text[:80]}...' "
-                f"(checked {len(self._instructions)} instructions via contains + fuzzy/semantic)"
-            )
-        
+            logger.debug(f"No custom instruction match for: '{input_text[:50]}...'")
+
         return best_match
     
     def _match_with_hybrid(self, input_text: str) -> Optional[CustomInstructionMatch]:

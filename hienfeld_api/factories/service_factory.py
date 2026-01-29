@@ -315,15 +315,27 @@ class ServiceFactory:
 
         try:
             from hienfeld.services.hybrid_similarity_service import HybridSimilarityService
+            from hienfeld.services.synonym_service import SynonymService
 
             # Enable embedding cache if configured
             if mode_config.use_embedding_cache and container.semantic:
                 container.semantic.enable_cache(mode_config.cache_size)
                 logger.info(f"Embedding cache enabled: {mode_config.cache_size} entries")
 
-            # Create hybrid service
+            # Create synonym service (also cacheable but cheap to create)
+            synonym_service = None
+            if mode_config.enable_synonyms:
+                try:
+                    synonym_service = SynonymService(config)
+                except Exception as e:
+                    logger.debug(f"Synonym service not available: {e}")
+
+            # Create hybrid service with pre-initialized services to avoid duplicates
             container.hybrid = HybridSimilarityService(
                 config,
+                rapidfuzz_service=container.base_similarity,
+                nlp_service=container.nlp,  # Reuse cached NLP service
+                synonym_service=synonym_service,
                 tfidf_service=container.tfidf if mode_config.enable_tfidf else None,
                 semantic_service=container.semantic if mode_config.enable_embeddings else None,
             )
