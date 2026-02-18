@@ -256,17 +256,20 @@ class ClauseLibraryService:
         """Extract text from .doc using win32com (Windows only)."""
         if not self._word_app:
             return ""
-            
+
         import tempfile
-        import os
-        
-        # Save bytes to temp file because Word needs a path
-        fd, path = tempfile.mkstemp(suffix='.doc')
+
+        # Use NamedTemporaryFile as a context manager so the file is always
+        # deleted on exit, even when an exception is raised.
+        # delete=False is required on Windows because Word must open the file
+        # by path while it still exists on disk; we delete it in the finally block.
+        tmp_path = None
         try:
-            with os.fdopen(fd, 'wb') as tmp:
+            with tempfile.NamedTemporaryFile(suffix=".doc", delete=False) as tmp:
                 tmp.write(file_bytes)
-            
-            doc = self._word_app.Documents.Open(path, ReadOnly=True, Visible=False)
+                tmp_path = tmp.name
+
+            doc = self._word_app.Documents.Open(tmp_path, ReadOnly=True, Visible=False)
             text = doc.Range().Text
             doc.Close(False)
             return text
@@ -274,11 +277,12 @@ class ClauseLibraryService:
             logger.error(f"Error parsing .doc {filename}: {e}")
             return ""
         finally:
-            # Cleanup temp file
-            if os.path.exists(path):
+            # Guaranteed cleanup: remove the temp file even if Word raised an error.
+            if tmp_path:
                 try:
-                    os.remove(path)
-                except:
+                    import os
+                    os.remove(tmp_path)
+                except OSError:
                     pass
 
     def _extract_text_docx(self, file_bytes: bytes) -> str:

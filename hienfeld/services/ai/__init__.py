@@ -5,6 +5,11 @@ from .embeddings_service import EmbeddingsService, SentenceTransformerEmbeddings
 from .vector_store import VectorStore, FaissVectorStore
 from .rag_service import RAGService
 from .llm_analysis_service import LLMAnalysisService
+from .policy_embeddings_cache import (
+    PolicyEmbeddingsCache,
+    get_policy_embeddings_cache,
+    CachedEmbeddings
+)
 
 __all__ = [
     'EmbeddingsService',
@@ -12,6 +17,9 @@ __all__ = [
     'VectorStore',
     'FaissVectorStore',
     'RAGService',
-    'LLMAnalysisService'
+    'LLMAnalysisService',
+    'PolicyEmbeddingsCache',
+    'get_policy_embeddings_cache',
+    'CachedEmbeddings',
 ]
 

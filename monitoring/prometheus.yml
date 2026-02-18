@@ -1,0 +1,56 @@
+# prometheus.yml
+#
+# Prometheus configuration for Hienfeld VB Converter monitoring.
+#
+# Scrapes metrics from:
+#   - VB Converter API (/metrics endpoint)
+#   - Prometheus itself (for monitoring the monitor)
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'vb-converter-monitor'
+
+# Alerting rules (optional - configure alertmanager separately)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - alertmanager:9093
+
+# Rule files for alerting (create these in ./rules/ if needed)
+# rule_files:
+#   - "rules/*.yml"
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    metrics_path: /metrics
+
+  # VB Converter API
+  # NOTE: Adjust target for your environment:
+  #   - Local development: host.docker.internal:8000
+  #   - Docker network: vb-api:8000
+  #   - Production: your-api-hostname:8000
+  - job_name: 'vb-converter-api'
+    static_configs:
+      - targets: ['host.docker.internal:8000']
+        labels:
+          environment: 'development'
+          service: 'vb-converter'
+    metrics_path: /metrics
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # Optional: Add more targets for staging/production
+  # - job_name: 'vb-converter-api-production'
+  #   static_configs:
+  #     - targets: ['api.vbconverter.example.com:443']
+  #       labels:
+  #         environment: 'production'
+  #         service: 'vb-converter'
+  #   scheme: https
+  #   metrics_path: /metrics

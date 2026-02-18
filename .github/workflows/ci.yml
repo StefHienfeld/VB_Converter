@@ -60,12 +60,20 @@ jobs:
       - name: Download SpaCy model
         run: python -m spacy download nl_core_news_md
 
-      - name: Run tests
+      - name: Run tests with coverage
         env:
           ENVIRONMENT: test
           DEBUG: false
-        run: pytest tests/ -v --tb=short
-        # Tests MUST pass - no masking failures
+        run: pytest tests/ -v --tb=short --cov=hienfeld --cov=hienfeld_api --cov-report=xml --cov-report=term-missing --cov-fail-under=30
+        # Tests MUST pass with minimum 30% coverage
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 7
 
   # ===========================================================================
   # SECURITY SCAN

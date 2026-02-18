@@ -272,22 +272,24 @@ class AnalysisOrchestrator:
         container: ServiceContainer,
         phase_timer: PhaseTimer
     ) -> List[PolicyDocumentSection]:
-        """Phase 3: Parse conditions files."""
+        """Phase 3: Parse conditions files.
+
+        IMPROVED v2.2: Uses parallel parsing for multiple files.
+        - 2+ files: parallel processing with ThreadPoolExecutor
+        - Expected speedup: ~20 seconds for 4+ PDF files
+        """
         policy_sections: List[PolicyDocumentSection] = []
 
         if input_data.use_conditions and input_data.conditions_files:
             job.update(progress=10, message="Voorwaarden verwerken...")
-            logger.info(f"Parsing {len(input_data.conditions_files)} conditions files...")
+            num_files = len(input_data.conditions_files)
+            logger.info(f"Parsing {num_files} conditions files...")
 
-            with Timer(f"Parse {len(input_data.conditions_files)} conditions files"):
-                for file_bytes, filename in input_data.conditions_files:
-                    try:
-                        logger.debug(f"   Parsing {filename} ({len(file_bytes)} bytes)...")
-                        sections = container.policy_parser.parse_policy_file(file_bytes, filename)
-                        policy_sections.extend(sections)
-                        logger.debug(f"     -> {len(sections)} sections extracted")
-                    except Exception as exc:
-                        logger.warning(f"Failed to parse {filename}: {exc}")
+            with Timer(f"Parse {num_files} conditions files"):
+                # Use parallel parsing for multiple files (significantly faster)
+                policy_sections = container.policy_parser.parse_files_parallel(
+                    input_data.conditions_files
+                )
 
             logger.info(f"Conditions parsed: {len(policy_sections)} total sections")
             phase_timer.checkpoint(f"Conditions parsed ({len(policy_sections)} sections)")

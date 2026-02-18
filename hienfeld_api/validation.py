@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Tuple
 from fastapi import UploadFile, HTTPException
 from .models import FileUploadLimits, UploadValidationError
+from .metrics import analysis_errors_total
 import logging
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,7 @@ async def validate_file_upload(
     # 3. Check extension whitelist
     ext = Path(sanitized).suffix.lower()
     if ext not in limits.allowed_extensions:
+        analysis_errors_total.labels(error_type="validation").inc()
         raise HTTPException(
             status_code=400,
             detail=f"File type not allowed. Allowed types: {', '.join(limits.allowed_extensions)}"
@@ -103,6 +105,7 @@ async def validate_file_upload(
 
             # Check size limit during read
             if len(file_bytes) > limits.max_file_size:
+                analysis_errors_total.labels(error_type="validation").inc()
                 raise HTTPException(
                     status_code=413,
                     detail=f"File too large. Maximum size: {limits.max_file_size / (1024*1024):.0f}MB"
@@ -120,6 +123,7 @@ async def validate_file_upload(
 
     # 5. Validate file is not empty
     if len(file_bytes) == 0:
+        analysis_errors_total.labels(error_type="validation").inc()
         raise HTTPException(
             status_code=400,
             detail="Uploaded file is empty"
@@ -221,6 +225,9 @@ def validate_analysis_settings(settings_dict: dict) -> dict:
             field = '.'.join(str(x) for x in error['loc'])
             msg = error['msg']
             errors.append(f"{field}: {msg}")
+
+        # Track validation errors in metrics
+        analysis_errors_total.labels(error_type="validation").inc()
 
         raise HTTPException(
             status_code=422,

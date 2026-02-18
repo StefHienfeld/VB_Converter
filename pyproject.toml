@@ -1,0 +1,42 @@
+[project]
+name = "hienfeld-vb-converter"
+version = "4.2.0"
+description = "Analyze and standardize insurance policy text clauses using hybrid similarity matching"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore::UserWarning"
+]
+
+[tool.coverage.run]
+source = ["hienfeld", "hienfeld_api"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/migrations/*",
+    "*/.venv/*",
+    "*/alembic/*"
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "pass"
+]
+show_missing = true
+fail_under = 10
+
+[tool.coverage.html]
+directory = "coverage_html"

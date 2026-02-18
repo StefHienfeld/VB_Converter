@@ -1,0 +1,84 @@
+# =============================================================================
+# VB CONVERTER - KUSTOMIZE BASE CONFIGURATION
+# =============================================================================
+# Base Kustomization voor VB Converter Kubernetes resources.
+#
+# Gebruik:
+#   kubectl apply -k k8s/base/          # Apply base configuratie
+#   kubectl apply -k k8s/overlays/dev/  # Apply dev overlay
+#   kubectl apply -k k8s/overlays/prod/ # Apply prod overlay
+#
+# Preview:
+#   kubectl kustomize k8s/base/
+# =============================================================================
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Namespace voor alle resources
+namespace: vb-converter
+
+# Gemeenschappelijke labels voor alle resources
+commonLabels:
+  app.kubernetes.io/part-of: vb-converter
+  app.kubernetes.io/managed-by: kustomize
+
+# Gemeenschappelijke annotaties
+commonAnnotations:
+  app.kubernetes.io/version: "4.4.0"
+
+# Resources in volgorde van dependencies
+resources:
+  # 1. Namespace eerst
+  - namespace.yaml
+
+  # 2. ConfigMaps en Secrets
+  - configmap.yaml
+  - secrets.yaml
+
+  # 3. Database (moet draaien voor backend)
+  - postgres-statefulset.yaml
+
+  # 4. Backend en Frontend
+  - backend-deployment.yaml
+  - frontend-deployment.yaml
+
+  # 5. Ingress (laatst, na services)
+  - ingress.yaml
+
+# Image tags - override in overlays voor specifieke versies
+images:
+  - name: hienfeld-api
+    newTag: latest
+  - name: hienfeld-frontend
+    newTag: latest
+
+# ConfigMap generator (alternatief voor handmatige configmap.yaml)
+# configMapGenerator:
+#   - name: hienfeld-config
+#     envs:
+#       - config.env
+
+# Secret generator (aanbevolen voor productie)
+# secretGenerator:
+#   - name: hienfeld-secrets
+#     envs:
+#       - secrets.env
+#     type: Opaque
+
+# Patches voor fine-tuning (voorbeeld)
+# patches:
+#   - patch: |-
+#       - op: replace
+#         path: /spec/replicas
+#         value: 3
+#     target:
+#       kind: Deployment
+#       name: hienfeld-api
+
+# Replica count kan via overlay worden aangepast
+# replicas:
+#   - name: hienfeld-api
+#     count: 2
+#   - name: hienfeld-frontend
+#     count: 2

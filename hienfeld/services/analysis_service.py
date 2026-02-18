@@ -29,6 +29,13 @@ try:
 except ImportError:
     HYBRID_AVAILABLE = False
 
+# Optional LLM reranking service (v4.3 - uncertain match enhancement)
+try:
+    from ..services.ai.reranking_service import ReRankingService
+    RERANKING_AVAILABLE = True
+except ImportError:
+    RERANKING_AVAILABLE = False
+
 logger = get_logger('analysis_service')
 
 
@@ -97,7 +104,8 @@ class AnalysisService:
         clause_library_service=None,
         admin_check_service=None,
         custom_instructions_service=None,
-        reference_service=None
+        reference_service=None,
+        reranking_service=None
     ):
         """
         Initialize the analysis service.
@@ -112,6 +120,7 @@ class AnalysisService:
             admin_check_service: Service for administrative/hygiene checks (Step 0)
             custom_instructions_service: Service for user-defined custom rules (Step 0.5)
             reference_service: Service for reference analysis comparison (yearly vs monthly)
+            reranking_service: Optional ReRankingService for LLM-based reranking (v4.3)
         """
         self.config = config
         self.ai_analyzer = ai_analyzer
@@ -119,7 +128,7 @@ class AnalysisService:
         self.admin_check_service = admin_check_service
         self.custom_instructions_service = custom_instructions_service
         self.reference_service = reference_service
-        
+
         # Similarity service for comparing against conditions (text-based)
         if similarity_service is None:
             self.similarity_service = RapidFuzzSimilarityService(
@@ -127,15 +136,24 @@ class AnalysisService:
             )
         else:
             self.similarity_service = similarity_service
-        
+
         # Semantic similarity service (embedding-based)
         self.semantic_similarity_service = semantic_similarity_service
         self._semantic_index_ready = False
-        
+
         # Hybrid similarity service (v3.0 semantic enhancement)
         self.hybrid_similarity_service = hybrid_similarity_service
         self._hybrid_enabled = hybrid_similarity_service is not None
-        
+
+        # LLM Reranking service (v4.3 - uncertain match enhancement)
+        self.reranking_service = reranking_service
+        self._reranking_enabled = (
+            reranking_service is not None and
+            hasattr(config, 'ai') and
+            hasattr(config.ai, 'reranking') and
+            config.ai.reranking.enabled
+        )
+
         # Cache for policy sections
         self._policy_sections: List[PolicyDocumentSection] = []
         self._policy_full_text: str = ""
@@ -143,6 +161,13 @@ class AnalysisService:
 
         # Cache for reference matches (text -> ReferenceMatch)
         self._reference_matches: Dict[str, Optional[ReferenceMatch]] = {}
+
+        # Reranking statistics (v4.3)
+        self._reranking_stats = {
+            'total_reranked': 0,
+            'score_improvements': 0,
+            'avg_score_boost': 0.0
+        }
 
     def _format_section_reference(self, section: PolicyDocumentSection) -> str:
         """
@@ -247,13 +272,37 @@ class AnalysisService:
     def set_custom_instructions_service(self, service) -> None:
         """
         Set the custom instructions service for user-defined rules (Step 0.5).
-        
+
         Args:
             service: CustomInstructionsService instance
         """
         self.custom_instructions_service = service
         if service and service.is_loaded:
             logger.info(f"Custom instructions service configured: {service.instruction_count} regels")
+
+    def set_reranking_service(self, service) -> None:
+        """
+        Set the LLM reranking service for uncertain match enhancement (v4.3).
+
+        The reranking service is used to boost confidence in matches that fall
+        within the uncertain range (0.70-0.85 similarity). It uses cross-encoder
+        or LLM-based scoring to determine if an uncertain match is actually correct.
+
+        Args:
+            service: ReRankingService instance
+        """
+        self.reranking_service = service
+        # Check if reranking is enabled in config
+        self._reranking_enabled = (
+            service is not None and
+            hasattr(self.config, 'ai') and
+            hasattr(self.config.ai, 'reranking') and
+            self.config.ai.reranking.enabled
+        )
+        if self._reranking_enabled:
+            logger.info("✅ LLM Reranking service configured (v4.3 uncertain match enhancement)")
+        elif service is not None:
+            logger.info("ℹ️ Reranking service provided but disabled in config (ai.reranking.enabled=False)")
     
     def _index_sections_for_semantic_search(self) -> None:
         """
@@ -376,7 +425,24 @@ class AnalysisService:
             logger.info(f"✅ Hybrid similarity enabled: {', '.join(active_methods) if active_methods else 'basic'}")
         else:
             logger.info("ℹ️ Hybrid similarity not configured - using RapidFuzz only")
-        
+
+        # Log LLM reranking status (v4.3)
+        if self._reranking_enabled:
+            rerank_config = self.config.ai.reranking
+            logger.info(
+                f"✅ LLM Reranking enabled (v4.3): "
+                f"uncertain range [{rerank_config.uncertain_min_threshold:.0%}-{rerank_config.uncertain_max_threshold:.0%}], "
+                f"llm_weight={rerank_config.llm_weight:.0%}"
+            )
+            # Reset reranking stats for this run
+            self._reranking_stats = {
+                'total_reranked': 0,
+                'score_improvements': 0,
+                'avg_score_boost': 0.0
+            }
+        else:
+            logger.info("ℹ️ LLM Reranking not enabled - uncertain matches use similarity score only")
+
         advice_map: Dict[str, AnalysisAdvice] = {}
         total = len(clusters)
 
@@ -1072,6 +1138,10 @@ class AnalysisService:
 
         Uses hybrid similarity's find_best_match for efficient batch processing.
         Falls back to loop-based RapidFuzz if hybrid service not available.
+
+        v4.3: Integrates LLM reranking for uncertain matches (0.70-0.85 range).
+        When a match falls in this uncertain range, the reranking service is used
+        to boost or penalize the score based on semantic relevance.
         """
         if not self._policy_sections:
             return None
@@ -1103,6 +1173,15 @@ class AnalysisService:
                     substring_score = min(1.0, 0.95 + (len(text) / len(best_section.simplified_text)) * 0.05)
                     if substring_score > best_score:
                         best_score = substring_score
+
+                # ============================================================
+                # v4.3: LLM RERANKING FOR UNCERTAIN MATCHES
+                # If score is in uncertain range (0.70-0.85), use LLM reranking
+                # to boost confidence or demote false positives
+                # ============================================================
+                best_score = self._apply_llm_reranking(
+                    text, best_section.simplified_text, best_score
+                )
 
                 return (best_score, best_section)
 
@@ -1140,10 +1219,91 @@ class AnalysisService:
         best_idx, best_score, best_section = top_candidates[0]
 
         if best_section and best_score >= self.MEDIUM_SIMILARITY_THRESHOLD:
+            # v4.3: Apply LLM reranking for uncertain matches
+            best_score = self._apply_llm_reranking(
+                text, best_section.simplified_text, best_score
+            )
             return (best_score, best_section)
 
         return None
-    
+
+    def _apply_llm_reranking(
+        self,
+        query_text: str,
+        candidate_text: str,
+        similarity_score: float
+    ) -> float:
+        """
+        Apply LLM reranking to boost or penalize uncertain matches (v4.3).
+
+        When a similarity score falls in the uncertain range (default: 0.70-0.85),
+        the reranking service uses cross-encoder or LLM-based scoring to determine
+        if the match is semantically correct.
+
+        The final score is a weighted blend:
+            final = (1 - llm_weight) * similarity + llm_weight * llm_score
+
+        Args:
+            query_text: The clause text being analyzed
+            candidate_text: The matched policy section text
+            similarity_score: The initial similarity score from hybrid matching
+
+        Returns:
+            Adjusted similarity score (may be higher or lower than original)
+        """
+        # Check if reranking is enabled and available
+        if not self._reranking_enabled or not self.reranking_service:
+            return similarity_score
+
+        # Get config thresholds
+        rerank_config = self.config.ai.reranking
+        min_threshold = rerank_config.uncertain_min_threshold
+        max_threshold = rerank_config.uncertain_max_threshold
+
+        # Only rerank uncertain matches (within the configured range)
+        if similarity_score < min_threshold or similarity_score >= max_threshold:
+            # Score is either too low (no match) or high enough (confident match)
+            # Skip reranking to save time
+            return similarity_score
+
+        try:
+            # Get LLM/cross-encoder score for this pair
+            llm_score = self.reranking_service.score_pair(query_text, candidate_text)
+
+            # Check minimum rerank score
+            if llm_score < rerank_config.min_rerank_score:
+                # LLM says this is not a good match, don't boost
+                logger.debug(
+                    f"LLM rerank: demoting match (sim={similarity_score:.2f}, llm={llm_score:.2f})"
+                )
+                # Reduce score slightly but don't completely discard
+                return similarity_score * 0.9
+
+            # Blend similarity score with LLM score
+            llm_weight = rerank_config.llm_weight
+            final_score = (1 - llm_weight) * similarity_score + llm_weight * llm_score
+
+            # Track statistics
+            self._reranking_stats['total_reranked'] += 1
+            if final_score > similarity_score:
+                self._reranking_stats['score_improvements'] += 1
+                boost = final_score - similarity_score
+                # Update running average of boost
+                n = self._reranking_stats['total_reranked']
+                prev_avg = self._reranking_stats['avg_score_boost']
+                self._reranking_stats['avg_score_boost'] = prev_avg + (boost - prev_avg) / n
+
+            logger.debug(
+                f"LLM rerank: {similarity_score:.2f} -> {final_score:.2f} "
+                f"(llm={llm_score:.2f}, weight={llm_weight:.0%})"
+            )
+
+            return final_score
+
+        except Exception as e:
+            logger.warning(f"LLM reranking failed: {e}, using original score")
+            return similarity_score
+
     def _check_significant_fragments(self, text: str) -> Optional[dict]:
         """Check if significant fragments appear in conditions."""
         if not self._policy_full_text or len(text) < 50:
@@ -1318,6 +1478,15 @@ class AnalysisService:
             logger.info("Semantische matches per categorie:")
             for cat, count in sorted(semantic_cats.items(), key=lambda x: -x[1]):
                 logger.info(f"  {cat}: {count}")
+
+        # Show LLM reranking statistics (v4.3)
+        if self._reranking_enabled and self._reranking_stats['total_reranked'] > 0:
+            logger.info("")
+            logger.info("LLM Reranking statistieken (v4.3):")
+            logger.info(f"  Totaal gereranked: {self._reranking_stats['total_reranked']}")
+            logger.info(f"  Score verbeteringen: {self._reranking_stats['score_improvements']}")
+            if self._reranking_stats['score_improvements'] > 0:
+                logger.info(f"  Gem. score boost: +{self._reranking_stats['avg_score_boost']:.2%}")
     
     def add_keyword_rule(
         self,

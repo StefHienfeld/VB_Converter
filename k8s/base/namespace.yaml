@@ -1,0 +1,18 @@
+# =============================================================================
+# VB CONVERTER - KUBERNETES NAMESPACE
+# =============================================================================
+# Namespace voor alle VB Converter resources.
+# Isoleert de applicatie van andere workloads in het cluster.
+#
+# Gebruik: kubectl apply -f namespace.yaml
+# =============================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vb-converter
+  labels:
+    app.kubernetes.io/name: vb-converter
+    app.kubernetes.io/part-of: vb-converter
+    # Optioneel: voor Istio service mesh
+    # istio-injection: enabled

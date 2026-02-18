@@ -74,3 +74,18 @@ class JobRepository(ABC):
             Number of stored jobs
         """
         pass
+
+    @abstractmethod
+    def cleanup_expired_jobs(self) -> int:
+        """
+        Delete jobs older than TTL (24h) for GDPR compliance.
+
+        Returns:
+            Number of jobs deleted.
+        """
+        pass
+
+    @property
+    def job_count(self) -> int:
+        """Current number of stored jobs (alias for count())."""
+        return self.count()

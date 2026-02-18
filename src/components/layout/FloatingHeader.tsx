@@ -35,8 +35,9 @@ export const FloatingHeader = ({ onSettingsClick, onHelpClick }: FloatingHeaderP
             size="icon"
             onClick={onHelpClick}
             className="rounded-full hover:bg-secondary/20 transition-colors"
+            aria-label="Help openen"
           >
-            <HelpCircle className="w-5 h-5 text-muted-foreground" />
+            <HelpCircle className="w-5 h-5 text-muted-foreground" aria-hidden="true" />
           </Button>
           <Button
             variant="ghost"
@@ -46,8 +47,9 @@ export const FloatingHeader = ({ onSettingsClick, onHelpClick }: FloatingHeaderP
               "rounded-full hover:bg-secondary/20 transition-all",
               "hover:rotate-90 duration-300"
             )}
+            aria-label="Instellingen openen"
           >
-            <Settings className="w-5 h-5 text-muted-foreground" />
+            <Settings className="w-5 h-5 text-muted-foreground" aria-hidden="true" />
           </Button>
         </div>
       </div>

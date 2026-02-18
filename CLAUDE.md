@@ -25,7 +25,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **pandas** - Data processing (CSV/Excel)
 - **RapidFuzz** - Fast fuzzy string matching
 - **SpaCy** (nl_core_news_md) - NLP lemmatization
-- **Gensim** - TF-IDF document similarity
+- **scikit-learn** - TF-IDF document similarity (v4.3: replaced gensim, 2-3x faster)
 - **sentence-transformers** - Semantic embeddings
 - **PyMuPDF/pdfplumber** - PDF parsing
 - **python-docx** - DOCX parsing
@@ -133,23 +133,56 @@ Located in `hienfeld/services/hybrid_similarity_service.py`. Combines 5 methods 
 
 2. **BALANCED** (~10min for 1660 rows) - `time_multiplier: 1.0` ⭐ RECOMMENDED
    - RapidFuzz (30%) + Lemmatized (25%) + Embeddings (15%) + TF-IDF (15%) + Synonyms (15%)
-   - **skip_embeddings_threshold: 0.92** (key optimization - only use embeddings if RapidFuzz < 92%)
+   - **skip_embeddings_threshold: 0.85** (v3.2 - skip embeddings if RapidFuzz >= 85%)
    - Best for: Most datasets, good quality/speed balance
 
 3. **ACCURATE** (~25min for 1660 rows) - `time_multiplier: 2.5`
    - RapidFuzz (20%) + Lemmatized (20%) + Embeddings (30%) + TF-IDF (15%) + Synonyms (15%)
-   - **skip_embeddings_threshold: 0.90** (uses embeddings more often)
+   - **skip_embeddings_threshold: 0.92** (uses embeddings more often for max accuracy)
    - Best for: Complex datasets, maximum accuracy needed
 
-**Performance Optimization Strategy**:
+**Performance Optimization Strategy (v3.2)**:
 - Embeddings are expensive (~5-10ms per comparison)
-- Skip embeddings when RapidFuzz already shows high similarity (>90-92%)
-- Most valuable in 70-85% similarity range (catches paraphrases)
-- See `PERFORMANCE_OPTIMIZATION.md` for detailed analysis
+- BALANCED: Skip embeddings when RapidFuzz >= 85% (saves ~35% embedding calls)
+- ACCURATE: Skip embeddings when RapidFuzz >= 92% (max quality, more embedding usage)
+- Embeddings most valuable in 70-85% similarity range (catches paraphrases)
+- Insurance clauses often use standard phrasing -> high RapidFuzz, embeddings less needed
 
 **Configuration:** `hienfeld/config.py` - `SemanticConfig` dataclass
 
 **Synonym Database:** `hienfeld/data/insurance_synonyms.json` (50+ term groups)
+
+### Policy Embeddings Cache (v4.4 - NEW)
+
+Located in `hienfeld/services/ai/policy_embeddings_cache.py`. Caches pre-computed embeddings for policy documents to avoid recomputation on repeated analyses.
+
+**Impact:**
+- **Time saved:** ~20-30 seconds per analysis (when using same policy documents)
+- **Hit rate:** 80-95% for typical workflows (same voorwaarden PDFs)
+- **Memory:** ~2-5 MB per cached document (depends on section count)
+
+**How it works:**
+1. When policy sections are indexed, a content-based hash (SHA256) is computed
+2. If the hash matches a cached entry, embeddings are reused
+3. If no match, embeddings are computed and cached for next time
+4. Cache key includes model name (different models have separate caches)
+
+**API Endpoints:**
+- `GET /api/cache/embeddings/stats` - Get cache statistics (hits, misses, time saved)
+- `POST /api/cache/embeddings/clear` - Clear the embeddings cache
+
+**Usage:**
+The cache is automatically used by `RAGService` and `SemanticSimilarityService`.
+No code changes needed - just enable semantic analysis.
+
+**Configuration:**
+```python
+# RAGService (enabled by default)
+rag = RAGService(embeddings_service, vector_store, enable_embedding_cache=True)
+
+# SemanticSimilarityService (enabled by default)
+semantic = SemanticSimilarityService(enable_policy_cache=True)
+```
 
 ### Domain Models (hienfeld/domain/)
 
@@ -390,3 +423,31 @@ VB_Converter/
 - Semantic features (v3.0) require SpaCy model: `python -m spacy download nl_core_news_md`
 - All NLP/ML processing is local (no external API calls required)
 - Optional OpenAI integration available but not required for core functionality
+
+## Audit Context (februari 2026)
+
+We voeren een volledige app-audit uit. Belangrijke richtlijnen:
+
+### Taal
+- Alle documentatie en rapporten in het Nederlands
+- Technische termen mogen in het Engels
+- Code comments in het Engels
+
+### Audit conventies
+- Findings altijd met severity: CRITICAL / HIGH / MEDIUM / LOW
+- Aanbevelingen altijd met prioriteit: P0 (must-have) / P1 (should-have) / P2 (nice-to-have)
+- Effort-schatting: S (< 1 dag) / M (1-3 dagen) / L (3-5 dagen) / XL (> 5 dagen)
+- Impact-schatting: laag / midden / hoog
+
+### Bestaande architectuur
+- Backend: Python 3.10+ met Reflex + FastAPI
+- Frontend: React/Vite/TypeScript (Lovable) + Reflex UI
+- NLP: SpaCy, RapidFuzz, Gensim, Sentence-transformers
+- Dit is een CORPORATE tool — security en compliance zijn essentieel
+
+### Paden
+- Project root: C:\Users\Stef\Desktop\Vb agent
+- Backend services: hienfeld\services\
+- Frontend (React): src\
+- API: hienfeld_api\app.py
+- Tests: tests

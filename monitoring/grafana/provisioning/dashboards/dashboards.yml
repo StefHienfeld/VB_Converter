@@ -1,0 +1,16 @@
+# Grafana dashboard provisioning
+# Automatically loads dashboards from the specified folder on startup
+
+apiVersion: 1
+
+providers:
+  - name: 'VB Converter Dashboards'
+    orgId: 1
+    folder: 'VB Converter'
+    folderUid: 'vb-converter'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

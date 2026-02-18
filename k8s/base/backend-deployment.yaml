@@ -1,0 +1,216 @@
+# =============================================================================
+# VB CONVERTER - BACKEND DEPLOYMENT
+# =============================================================================
+# FastAPI backend deployment met 2 replicas voor high availability.
+# Image: hienfeld-api:latest
+# Poort: 8000
+#
+# Health checks:
+# - Liveness:  /api/health (herstart pod bij failure)
+# - Readiness: /api/health (verwijder uit service bij failure)
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hienfeld-api
+  namespace: vb-converter
+  labels:
+    app.kubernetes.io/name: hienfeld-api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: vb-converter
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hienfeld-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hienfeld-api
+        app.kubernetes.io/component: backend
+      annotations:
+        # Force rolling restart bij config changes
+        checksum/config: "{{ include (print $.Template.BasePath \"/configmap.yaml\") . | sha256sum }}"
+    spec:
+      serviceAccountName: default
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+      # Init container om te wachten op PostgreSQL
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Wachten op PostgreSQL..."
+              until nc -z hienfeld-postgres 5432; do
+                echo "PostgreSQL nog niet beschikbaar, wacht 2 seconden..."
+                sleep 2
+              done
+              echo "PostgreSQL is beschikbaar!"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+      containers:
+        - name: api
+          image: hienfeld-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+
+          # Resource limits
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+          # Environment variabelen uit ConfigMap
+          envFrom:
+            - configMapRef:
+                name: hienfeld-config
+
+          # Secrets als environment variabelen
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: hienfeld-secrets
+                  key: POSTGRES_URL
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hienfeld-secrets
+                  key: SECRET_KEY
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hienfeld-secrets
+                  key: OPENAI_API_KEY
+                  optional: true
+
+          # Liveness probe - herstart pod als applicatie niet reageert
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Readiness probe - verwijder uit load balancer als niet klaar
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # Startup probe - langere wachttijd voor eerste start (model loading)
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30  # Max 5 minuten wachten op startup
+
+          # Security context
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # NLP models schrijven naar cache
+            capabilities:
+              drop:
+                - ALL
+
+          # Volume mounts voor NLP model cache
+          volumeMounts:
+            - name: model-cache
+              mountPath: /home/appuser/.cache
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: model-cache
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 500Mi
+
+      # Spread pods over nodes voor HA
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: hienfeld-api
+
+---
+# =============================================================================
+# BACKEND SERVICE
+# =============================================================================
+# ClusterIP service voor interne communicatie.
+# Toegankelijk via: hienfeld-api.vb-converter.svc.cluster.local:8000
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: hienfeld-api
+  namespace: vb-converter
+  labels:
+    app.kubernetes.io/name: hienfeld-api
+    app.kubernetes.io/component: backend
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: hienfeld-api
+
+---
+# =============================================================================
+# POD DISRUPTION BUDGET
+# =============================================================================
+# Garandeert minimaal 1 pod beschikbaar tijdens maintenance/upgrades.
+# =============================================================================
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: hienfeld-api-pdb
+  namespace: vb-converter
+  labels:
+    app.kubernetes.io/name: hienfeld-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hienfeld-api

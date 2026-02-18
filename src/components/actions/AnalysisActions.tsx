@@ -60,7 +60,11 @@ export function AnalysisActions({
           </Label>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Info className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground cursor-help" />
+              <Info
+                className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground cursor-help"
+                role="img"
+                aria-label="Meer informatie over AI Analyse"
+              />
             </TooltipTrigger>
             <TooltipContent side="top" className="max-w-xs">
               <p className="text-xs">

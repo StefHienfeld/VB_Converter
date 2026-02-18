@@ -152,7 +152,8 @@ export const ExtraInstructionInput = ({
 
     // If parsing fails, keep a single row with the raw value as "text" so user can salvage it.
     return [{ id: makeId(), text: v, action: "" }];
-  }, []); // intentionally only once (we handle external updates via effect below)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally run only once — external value changes handled by the effect below
 
   const [rows, setRows] = useState<InstructionRow[]>(initialRows);
   const lastEmittedValueRef = useRef<string>(value ?? "");
@@ -212,7 +213,11 @@ export const ExtraInstructionInput = ({
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
-              <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+              <HelpCircle
+                className="h-4 w-4 text-muted-foreground cursor-help"
+                role="img"
+                aria-label="Help: hoe werken extra instructies?"
+              />
             </TooltipTrigger>
             <TooltipContent side="right" className="max-w-sm whitespace-pre-line">
               {HELP_TEXT}
@@ -236,12 +241,14 @@ export const ExtraInstructionInput = ({
                 onChange={(e) => updateRow(row.id, { text: e.target.value })}
                 placeholder="bijv. meeverzekerde"
                 className="bg-background/60"
+                aria-label="Zoektekst voor instructieregel"
               />
               <Input
                 value={row.action}
                 onChange={(e) => updateRow(row.id, { action: e.target.value })}
                 placeholder="bijv. Vullen in partijenkaart"
                 className="bg-background/60"
+                aria-label="Actie voor instructieregel"
               />
               <Button
                 type="button"

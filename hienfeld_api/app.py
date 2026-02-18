@@ -13,7 +13,7 @@ Main responsibilities:
 Architecture (v4.3 - MVC refactoring):
 - Orchestrator pattern: AnalysisOrchestrator coordinates the pipeline
 - Factory pattern: ServiceFactory creates and configures services
-- Repository pattern: MemoryJobRepository stores job state
+- Repository pattern: SQLJobRepository (SQLite default) stores job state persistently
 
 Run locally (example):
 
@@ -22,13 +22,16 @@ Run locally (example):
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 import uuid
+from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 
 from hienfeld.config import load_config
 from hienfeld.settings import get_settings
@@ -43,17 +46,32 @@ from hienfeld_api.models import (
     AnalysisResultsResponse,
     UploadPreviewResponse,
 )
-from hienfeld_api.repositories import MemoryJobRepository
-from hienfeld_api.middleware import setup_security
+from hienfeld_api.repositories import MemoryJobRepository, SQLJobRepository
+from hienfeld_api.middleware import setup_security, limiter
 from hienfeld_api.routes import health_router
+from hienfeld_api.routes.auth import auth_router
+from hienfeld_api.auth import get_current_user_dependency
 from hienfeld_api.orchestrators import AnalysisOrchestrator, AnalysisInput
 from hienfeld_api.factories import ServiceFactory
+from hienfeld_api.validation import validate_file_upload, validate_analysis_settings
+from hienfeld_api.models import FileUploadLimits, AnalysisSettings
 
 from hienfeld.logging_config import get_logger, setup_logging
 from hienfeld.services.service_cache import get_service_cache
 from hienfeld.services.ingestion_service import IngestionService
 from hienfeld.services.similarity_service import RapidFuzzSimilarityService
 from hienfeld.services.custom_instructions_service import CustomInstructionsService
+from hienfeld_api.audit_service import AuditService
+
+# Prometheus metrics
+from hienfeld_api.metrics import (
+    get_metrics,
+    get_content_type,
+    record_analysis_start,
+    record_analysis_complete,
+    record_analysis_error,
+    active_jobs,
+)
 
 # ---------------------------------------------------------------------------
 # Logging & app setup
@@ -80,34 +98,131 @@ settings = get_settings()
 service_factory = ServiceFactory()
 orchestrator = AnalysisOrchestrator(service_factory=service_factory)
 
+# ---------------------------------------------------------------------------
+# Job repository (declared early so lifespan can access it)
+# ---------------------------------------------------------------------------
+
+
+def _create_job_repository():
+    """
+    Create the job repository based on environment configuration.
+
+    Priority:
+    1. POSTGRES_URL  → SQLJobRepository (PostgreSQL, persistent)
+    2. SQLITE_URL    → SQLJobRepository (SQLite, persistent local dev)
+    3. DATABASE_URL  → SQLJobRepository (unified URL; default: SQLite file)
+    4. None          → MemoryJobRepository (in-memory, no persistence)
+
+    DATABASE_URL defaults to sqlite:///./hienfeld_jobs.db so jobs survive
+    server restarts without any extra configuration.
+
+    Also stores the session factory globally so AuditService can use it.
+    """
+    global _db_session_factory
+    from hienfeld_api.database import Base, create_db_engine, create_session_factory
+
+    db_url = settings.postgres_url or settings.sqlite_url or settings.database_url
+    if db_url:
+        try:
+            engine = create_db_engine(db_url)
+            # Create tables if they don't exist (Alembic handles migrations in production)
+            Base.metadata.create_all(bind=engine)
+            session_factory = create_session_factory(engine)
+            _db_session_factory = session_factory
+            repo = SQLJobRepository(session_factory)
+            db_type = "PostgreSQL" if "postgresql" in db_url else "SQLite"
+            logger.info("Job repository: %s (%s)", db_type, db_url.split("@")[-1] if "@" in db_url else db_url)
+            return repo
+        except Exception as exc:
+            logger.warning(
+                "Could not connect to database (%s) — falling back to in-memory storage: %s",
+                db_url.split("@")[-1] if "@" in db_url else db_url,
+                exc,
+            )
+
+    logger.info("Job repository: in-memory (jobs lost on restart)")
+    return MemoryJobRepository()
+
+
+_db_session_factory = None
+job_repository = _create_job_repository()
+audit_service = AuditService(session_factory=_db_session_factory)
+
+# ---------------------------------------------------------------------------
+# GDPR background cleanup task (every 30 min, removes jobs > 24h old)
+# ---------------------------------------------------------------------------
+
+_cleanup_task: Optional[asyncio.Task] = None
+_CLEANUP_INTERVAL_SECONDS = 30 * 60  # 30 minutes
+
+
+async def _periodic_job_cleanup() -> None:
+    """Background task: clean up expired jobs every 30 minutes for GDPR compliance."""
+    while True:
+        try:
+            await asyncio.sleep(_CLEANUP_INTERVAL_SECONDS)
+            deleted = job_repository.cleanup_expired_jobs()
+            if deleted:
+                logger.info("Periodic GDPR cleanup: deleted %d expired jobs", deleted)
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.error("Error in periodic job cleanup: %s", exc, exc_info=True)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application startup and shutdown lifecycle."""
+    global _cleanup_task
+    _cleanup_task = asyncio.create_task(_periodic_job_cleanup())
+    logger.info("GDPR job cleanup task started (interval: 30 min, TTL: 24h)")
+    yield
+    if _cleanup_task:
+        _cleanup_task.cancel()
+        logger.info("GDPR job cleanup task stopped")
+
+
 app = FastAPI(
     title="Hienfeld VB Converter API",
     version=settings.app_version,
     docs_url="/docs" if settings.debug else None,
     redoc_url="/redoc" if settings.debug else None,
+    lifespan=lifespan,
 )
 
 # CORS - origins loaded from environment variable ALLOWED_ORIGINS
+_allowed_origins = settings.get_allowed_origins_list()
+if settings.is_production:
+    _localhost_origins = [o for o in _allowed_origins if "localhost" in o or "127.0.0.1" in o]
+    if _localhost_origins:
+        logger.warning(
+            "CORS WARNING: localhost origins are allowed in production! "
+            "Remove from ALLOWED_ORIGINS: %s",
+            ", ".join(_localhost_origins),
+        )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.get_allowed_origins_list(),
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 
 # Security middleware (headers, logging, rate limiting)
 setup_security(app)
 
-# Health check routes (for Docker/K8s)
+# Auth router (public — no JWT required to log in)
+app.include_router(auth_router, prefix="/api")
+
+# JWT dependency — applied to all /api/* routes EXCEPT /auth/* and /health*
+_require_auth = get_current_user_dependency(settings)
+
+# Health check routes (for Docker/K8s) — public, no auth
 app.include_router(health_router, prefix="/api")
 
-
-# ---------------------------------------------------------------------------
-# Job storage (Repository pattern)
-# ---------------------------------------------------------------------------
-
-job_repository = MemoryJobRepository()
+if settings.auth_enabled:
+    logger.info("JWT authentication ENABLED (AUTH_ENABLED=true)")
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +266,32 @@ def _run_analysis_job(
         settings=settings,
     )
 
-    # Delegate to orchestrator
-    orchestrator.run(job, input_data)
+    # Delegate to orchestrator and record audit log on completion/failure
+    start_time = time.monotonic()
+    analysis_mode = settings.get("analysis_mode", "balanced")
+
+    # Record metrics: analysis started
+    record_analysis_start()
+
+    try:
+        orchestrator.run(job, input_data)
+        duration = time.monotonic() - start_time
+        refreshed = job_repository.get(job_id)
+        if refreshed and refreshed.status == JobStatus.COMPLETED:
+            audit_service.log_analysis_completed(job_id, "system", int(duration), analysis_mode)
+            # Record metrics: analysis completed
+            row_count = refreshed.stats.get("total_rows", 0) if refreshed.stats else 0
+            record_analysis_complete(duration, analysis_mode, row_count)
+        else:
+            audit_service.log_analysis_failed(job_id, "system", int(duration), analysis_mode)
+            record_analysis_error("processing")
+    except Exception as exc:
+        duration = time.monotonic() - start_time
+        audit_service.log_analysis_failed(job_id, "system", int(duration), analysis_mode)
+        # Record metrics: analysis error
+        error_type = "timeout" if "timeout" in str(exc).lower() else "processing"
+        record_analysis_error(error_type)
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +300,10 @@ def _run_analysis_job(
 
 
 @app.post("/api/upload/preview", response_model=UploadPreviewResponse)
-async def upload_preview(policy_file: UploadFile = File(...)) -> UploadPreviewResponse:
+async def upload_preview(
+    policy_file: UploadFile = File(...),
+    _current_user: str = Depends(_require_auth),
+) -> UploadPreviewResponse:
     """
     Optional helper endpoint:
     - Accept a polisbestand
@@ -185,8 +327,11 @@ async def upload_preview(policy_file: UploadFile = File(...)) -> UploadPreviewRe
 
 
 @app.post("/api/analyze", response_model=StartAnalysisResponse)
+@limiter.limit("10/minute")
 async def start_analysis(
+    request: Request,
     background_tasks: BackgroundTasks,
+    _current_user: str = Depends(_require_auth),
     policy_file: UploadFile = File(...),
     conditions_files: List[UploadFile] = File(default=[]),
     clause_library_files: List[UploadFile] = File(default=[]),
@@ -205,55 +350,92 @@ async def start_analysis(
     Start a new analysis job.
 
     This endpoint:
-    - Validates and reads uploaded files
+    - Validates and reads uploaded files (size, type, extension)
+    - Validates analysis settings (range checks)
     - Creates a background job
     - Immediately returns a job_id
     """
-    policy_bytes = await policy_file.read()
-    if not policy_bytes:
-        raise HTTPException(status_code=400, detail="Polisbestand is leeg of ontbreekt")
+    upload_limits = FileUploadLimits()
+
+    # Validate and read policy file (required)
+    policy_bytes, policy_filename = await validate_file_upload(policy_file, upload_limits)
 
     conditions_data: List[tuple[bytes, str]] = []
     for f in conditions_files:
-        data = await f.read()
-        if data:
-            conditions_data.append((data, f.filename))
+        try:
+            data, fname = await validate_file_upload(f, upload_limits)
+            conditions_data.append((data, fname))
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Voorwaardenbestand ongeldig: {exc}") from exc
 
     clause_data: List[tuple[bytes, str]] = []
     for f in clause_library_files:
-        data = await f.read()
-        if data:
-            clause_data.append((data, f.filename))
+        try:
+            data, fname = await validate_file_upload(f, upload_limits)
+            clause_data.append((data, fname))
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Clausulebibliotheek ongeldig: {exc}") from exc
 
-    # Read reference file (optional - for yearly vs monthly comparison)
+    # Read reference file (optional)
     reference_data: Optional[tuple[bytes, str]] = None
     if reference_file:
-        ref_bytes = await reference_file.read()
-        if ref_bytes:
-            reference_data = (ref_bytes, reference_file.filename)
-            logger.info(f"Reference file uploaded: {reference_file.filename}")
+        try:
+            ref_bytes, ref_name = await validate_file_upload(reference_file, upload_limits)
+            reference_data = (ref_bytes, ref_name)
+            logger.info("Reference file uploaded: %s", ref_name)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Referentiebestand ongeldig: {exc}") from exc
+
+    # Validate analysis settings (range + allowed values)
+    raw_settings = {
+        "cluster_accuracy": cluster_accuracy,
+        "min_frequency": min_frequency,
+        "window_size": window_size,
+        "analysis_mode": analysis_mode,
+        "extra_instruction": extra_instruction,
+    }
+    validated = validate_analysis_settings(raw_settings)
 
     job_id = str(uuid.uuid4())
     job = AnalysisJob(id=job_id)
     job_repository.save(job)
 
+    # GDPR audit: log analysis start (filenames only, no content)
+    all_file_names = [policy_filename]
+    all_file_names += [fname for _, fname in conditions_data]
+    all_file_names += [fname for _, fname in clause_data]
+    if reference_data:
+        all_file_names.append(reference_data[1])
+    audit_service.log_analysis_started(
+        job_id=job_id,
+        user_id=_current_user,
+        file_names=all_file_names,
+        analysis_mode=analysis_mode,
+    )
+
     settings = {
-        "cluster_accuracy": cluster_accuracy,
-        "min_frequency": min_frequency,
-        "window_size": window_size,
+        "cluster_accuracy": validated["cluster_accuracy"],
+        "min_frequency": validated["min_frequency"],
+        "window_size": validated["window_size"],
         "use_conditions": use_conditions,
         "use_window_limit": use_window_limit,
         "use_semantic": use_semantic,
         "ai_enabled": ai_enabled,
-        "analysis_mode": analysis_mode,
-        "extra_instruction": extra_instruction,
+        "analysis_mode": validated["analysis_mode"],
+        "extra_instruction": validated["extra_instruction"],
     }
 
     background_tasks.add_task(
         _run_analysis_job,
         job_id,
         policy_bytes,
-        policy_file.filename,
+        policy_filename,
         conditions_data,
         clause_data,
         reference_data,
@@ -269,7 +451,10 @@ async def start_analysis(
 
 
 @app.get("/api/status/{job_id}", response_model=JobStatusResponse)
-async def get_status(job_id: str) -> JobStatusResponse:
+async def get_status(
+    job_id: str,
+    _current_user: str = Depends(_require_auth),
+) -> JobStatusResponse:
     """Return status/progress for a given analysis job."""
     job = job_repository.get(job_id)
     if not job:
@@ -287,7 +472,10 @@ async def get_status(job_id: str) -> JobStatusResponse:
 
 
 @app.get("/api/results/{job_id}", response_model=AnalysisResultsResponse)
-async def get_results(job_id: str) -> AnalysisResultsResponse:
+async def get_results(
+    job_id: str,
+    _current_user: str = Depends(_require_auth),
+) -> AnalysisResultsResponse:
     """
     Return full analysis results for a completed job.
 
@@ -316,7 +504,10 @@ async def get_results(job_id: str) -> AnalysisResultsResponse:
 
 
 @app.get("/api/report/{job_id}")
-async def download_report(job_id: str) -> StreamingResponse:
+async def download_report(
+    job_id: str,
+    _current_user: str = Depends(_require_auth),
+) -> StreamingResponse:
     """
     Download the Excel rapport for a completed job.
     """
@@ -344,7 +535,8 @@ async def download_report(job_id: str) -> StreamingResponse:
 @app.post("/api/test-custom-instructions")
 def test_custom_instructions(
     instructions_text: str = Form(...),
-    test_clause: str = Form(...)
+    test_clause: str = Form(...),
+    _current_user: str = Depends(_require_auth),
 ):
     """
     Test endpoint for debugging custom instructions matching.
@@ -443,7 +635,9 @@ def test_custom_instructions(
 
 
 @app.get("/api/cache/stats")
-async def get_cache_stats() -> Dict[str, Any]:
+async def get_cache_stats(
+    _current_user: str = Depends(_require_auth),
+) -> Dict[str, Any]:
     """
     Get service cache statistics.
 
@@ -452,19 +646,34 @@ async def get_cache_stats() -> Dict[str, Any]:
     - Access counts per service
     - Age of cached services
     - Last access times
+    - Policy embeddings cache stats (v4.4)
 
     Useful for monitoring cache performance and debugging.
     """
     cache = get_service_cache()
-    return cache.get_stats()
+    stats = cache.get_stats()
+
+    # Include policy embeddings cache stats (v4.4)
+    try:
+        from hienfeld.services.ai.policy_embeddings_cache import get_policy_embeddings_cache
+        embeddings_cache = get_policy_embeddings_cache()
+        stats['policy_embeddings_cache'] = embeddings_cache.get_statistics()
+    except Exception as e:
+        stats['policy_embeddings_cache'] = {'error': str(e)}
+
+    return stats
 
 
 @app.post("/api/cache/clear")
-async def clear_cache() -> Dict[str, Any]:
+async def clear_cache(
+    _current_user: str = Depends(_require_auth),
+) -> Dict[str, Any]:
     """
     Clear entire service cache.
 
     Forces all services (NLP, embeddings, etc.) to reload on next request.
+    Also clears the policy embeddings cache (v4.4).
+
     Useful for:
     - Testing
     - Forcing model updates
@@ -475,16 +684,32 @@ async def clear_cache() -> Dict[str, Any]:
     """
     cache = get_service_cache()
     count = cache.clear()
-    logger.info(f"🗑️  Cache cleared via API ({count} entries)")
+
+    # Also clear policy embeddings cache (v4.4)
+    embeddings_count = 0
+    try:
+        from hienfeld.services.ai.policy_embeddings_cache import get_policy_embeddings_cache
+        embeddings_cache = get_policy_embeddings_cache()
+        embeddings_count = embeddings_cache.clear()
+    except Exception:
+        pass
+
+    total_count = count + embeddings_count
+    logger.info(f"Cache cleared via API ({count} services, {embeddings_count} embeddings)")
     return {
         "status": "ok",
-        "message": f"Cleared {count} cached services",
-        "cleared_count": count
+        "message": f"Cleared {count} services, {embeddings_count} embeddings",
+        "cleared_count": total_count,
+        "services_cleared": count,
+        "embeddings_cleared": embeddings_count
     }
 
 
 @app.delete("/api/cache/{key}")
-async def invalidate_cache_entry(key: str) -> Dict[str, Any]:
+async def invalidate_cache_entry(
+    key: str,
+    _current_user: str = Depends(_require_auth),
+) -> Dict[str, Any]:
     """
     Invalidate specific cache entry.
 
@@ -509,3 +734,147 @@ async def invalidate_cache_entry(key: str) -> Dict[str, Any]:
         )
 
 
+# ---------------------------------------------------------------------------
+# Policy Embeddings Cache endpoints (v4.4)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/cache/embeddings/stats")
+async def get_embeddings_cache_stats(
+    _current_user: str = Depends(_require_auth),
+) -> Dict[str, Any]:
+    """
+    Get policy embeddings cache statistics (v4.4).
+
+    Returns:
+    - Number of cached documents
+    - Cache hit/miss rates
+    - Total time saved (estimated)
+    - Memory usage
+
+    This cache avoids recomputing embeddings for policy documents
+    that have been analyzed before, saving ~20-30 seconds per analysis.
+    """
+    try:
+        from hienfeld.services.ai.policy_embeddings_cache import get_policy_embeddings_cache
+        embeddings_cache = get_policy_embeddings_cache()
+        return embeddings_cache.get_statistics()
+    except Exception as e:
+        logger.error(f"Error getting embeddings cache stats: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not get embeddings cache stats: {e}"
+        )
+
+
+@app.post("/api/cache/embeddings/clear")
+async def clear_embeddings_cache(
+    _current_user: str = Depends(_require_auth),
+) -> Dict[str, Any]:
+    """
+    Clear policy embeddings cache (v4.4).
+
+    Forces re-computation of embeddings on next analysis.
+    Useful when testing or debugging embedding issues.
+
+    Returns:
+        Number of entries cleared
+    """
+    try:
+        from hienfeld.services.ai.policy_embeddings_cache import get_policy_embeddings_cache
+        embeddings_cache = get_policy_embeddings_cache()
+        count = embeddings_cache.clear()
+        logger.info(f"Policy embeddings cache cleared via API ({count} entries)")
+        return {
+            "status": "ok",
+            "message": f"Cleared {count} cached embedding entries",
+            "cleared_count": count
+        }
+    except Exception as e:
+        logger.error(f"Error clearing embeddings cache: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not clear embeddings cache: {e}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# GDPR: manual job cleanup endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/jobs/cleanup")
+async def trigger_job_cleanup(
+    _current_user: str = Depends(_require_auth),
+) -> Dict[str, Any]:
+    """
+    Manually trigger GDPR job cleanup.
+
+    Deletes all jobs older than 24 hours (TTL policy).
+    Normally runs automatically every 30 minutes.
+    """
+    deleted = job_repository.cleanup_expired_jobs()
+    remaining = job_repository.job_count
+    logger.info("Manual GDPR cleanup: %d jobs deleted, %d remaining", deleted, remaining)
+    return {
+        "status": "ok",
+        "deleted": deleted,
+        "remaining": remaining,
+        "ttl_hours": 24,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Prometheus Metrics Endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics_endpoint(request: Request) -> Response:
+    """
+    Expose Prometheus metrics for scraping.
+
+    Access is restricted to:
+    1. Requests originating from localhost (127.0.0.1 / ::1), OR
+    2. Requests that supply a valid METRICS_TOKEN in the Authorization header
+       (format: 'Bearer <token>'  or just the token as a raw value).
+
+    Configure METRICS_TOKEN via environment variable. If not set, only
+    localhost access is permitted.
+
+    Returns metrics in Prometheus exposition format.
+    """
+    # Determine the client IP, respecting X-Forwarded-For from trusted proxies.
+    client_host = request.client.host if request.client else ""
+    is_localhost = client_host in ("127.0.0.1", "::1", "localhost")
+
+    # Check for optional METRICS_TOKEN (allows Prometheus running off-host)
+    expected_token: str = getattr(settings, "metrics_token", "") or ""
+    if expected_token:
+        auth_header = request.headers.get("Authorization", "")
+        # Accept both 'Bearer <token>' and bare token value
+        provided_token = auth_header.removeprefix("Bearer ").strip()
+        token_valid = provided_token == expected_token
+    else:
+        token_valid = False
+
+    if not is_localhost and not token_valid:
+        logger.warning(
+            "Metrics endpoint access denied for host '%s' (no valid token, not localhost)",
+            client_host,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Metrics endpoint is only accessible from localhost or with a valid METRICS_TOKEN.",
+        )
+
+    # Update active jobs gauge before returning metrics
+    try:
+        active_jobs.set(job_repository.job_count)
+    except Exception:
+        pass  # Don't fail metrics if job count fails
+
+    return Response(
+        content=get_metrics(),
+        media_type=get_content_type(),
+    )

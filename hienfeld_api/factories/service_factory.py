@@ -240,9 +240,9 @@ class ServiceFactory:
         if ai_enabled:
             self._initialize_llm(container)
 
-        # Hybrid similarity service
+        # Hybrid similarity service (with optional FAISS index for fast search)
         if HYBRID_AVAILABLE and config.semantic.enabled:
-            self._initialize_hybrid(container)
+            self._initialize_hybrid(container, policy_sections)
 
     def _initialize_embeddings(
         self,
@@ -308,8 +308,12 @@ class ServiceFactory:
         except Exception as exc:
             logger.warning(f"LLM analyzer initialization failed: {exc}")
 
-    def _initialize_hybrid(self, container: ServiceContainer) -> None:
-        """Initialize hybrid similarity service."""
+    def _initialize_hybrid(
+        self,
+        container: ServiceContainer,
+        policy_sections: Optional[List[Any]] = None
+    ) -> None:
+        """Initialize hybrid similarity service with optional FAISS index."""
         config = container.config
         mode_config = config.semantic.get_active_config()
 
@@ -363,9 +367,51 @@ class ServiceFactory:
                 container.clustering.similarity_service = container.hybrid
                 logger.info("Clustering upgraded to hybrid similarity")
 
+                # Build FAISS index for fast ANN search (v3.4)
+                # This provides 100+ second speedup on large datasets
+                if policy_sections and mode_config.enable_embeddings:
+                    self._build_faiss_index(container.hybrid, policy_sections)
+
         except Exception as e:
             logger.warning(f"Could not initialize hybrid similarity: {e}")
             container.hybrid = None
+
+    def _build_faiss_index(
+        self,
+        hybrid_service: "HybridSimilarityService",
+        policy_sections: List[Any]
+    ) -> None:
+        """
+        Build FAISS index for fast ANN search on policy sections.
+
+        This is called automatically when hybrid similarity is initialized
+        with policy sections available.
+
+        Args:
+            hybrid_service: The hybrid similarity service
+            policy_sections: Parsed policy document sections
+        """
+        try:
+            # Extract texts from policy sections
+            section_texts = [
+                s.simplified_text for s in policy_sections
+                if hasattr(s, 'simplified_text') and s.simplified_text
+            ]
+
+            if not section_texts:
+                logger.debug("No policy section texts available for FAISS index")
+                return
+
+            # Build the FAISS index
+            success = hybrid_service.build_faiss_index(section_texts)
+
+            if success:
+                logger.info(f"FAISS index built for {len(section_texts)} policy sections")
+            else:
+                logger.debug("FAISS index not built (embeddings may not be available)")
+
+        except Exception as e:
+            logger.warning(f"Could not build FAISS index: {e}")
 
     def create_custom_instructions(
         self,

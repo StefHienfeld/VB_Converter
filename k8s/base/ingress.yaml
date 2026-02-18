@@ -1,0 +1,129 @@
+# =============================================================================
+# VB CONVERTER - INGRESS
+# =============================================================================
+# Nginx Ingress configuratie voor externe toegang.
+#
+# Routing:
+# - /api/* -> hienfeld-api:8000 (backend)
+# - /*     -> hienfeld-frontend:80 (frontend)
+#
+# Vereisten:
+# - Nginx Ingress Controller moet geinstalleerd zijn
+# - Voor TLS: cert-manager of handmatig TLS secret
+#
+# Installatie Nginx Ingress:
+# kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.9.4/deploy/static/provider/cloud/deploy.yaml
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hienfeld-ingress
+  namespace: vb-converter
+  labels:
+    app.kubernetes.io/name: hienfeld-ingress
+    app.kubernetes.io/part-of: vb-converter
+  annotations:
+    # Nginx Ingress Controller specifiek
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+
+    # Rate limiting
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/limit-connections: "100"
+
+    # Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: SAMEORIGIN";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+
+    # Backend protocol
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+
+    # Uncomment voor automatische TLS via cert-manager
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+
+  # TLS configuratie (uncomment voor HTTPS)
+  # tls:
+  #   - hosts:
+  #       - vb-converter.example.com
+  #     secretName: hienfeld-tls
+
+  rules:
+    # Pas de hostname aan voor jouw omgeving
+    - host: vb-converter.local
+      http:
+        paths:
+          # Backend API routes
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: hienfeld-api
+                port:
+                  number: 8000
+
+          # Frontend (catch-all)
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hienfeld-frontend
+                port:
+                  number: 80
+
+---
+# =============================================================================
+# INGRESS ZONDER HOSTNAME (voor development)
+# =============================================================================
+# Gebruik deze Ingress als je geen hostname hebt (bijv. minikube/kind).
+# Toegankelijk via het cluster IP of LoadBalancer IP.
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hienfeld-ingress-dev
+  namespace: vb-converter
+  labels:
+    app.kubernetes.io/name: hienfeld-ingress-dev
+    app.kubernetes.io/part-of: vb-converter
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    # Rewrite voor SPA routing
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      if ($request_uri !~* ^/(api|health|assets|favicon)) {
+        rewrite ^ /index.html break;
+      }
+spec:
+  ingressClassName: nginx
+  rules:
+    # Geen hostname = wildcard (alle requests)
+    - http:
+        paths:
+          # Backend API routes (specifiekere path eerst)
+          - path: /api(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: hienfeld-api
+                port:
+                  number: 8000
+
+          # Frontend (catch-all)
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hienfeld-frontend
+                port:
+                  number: 80

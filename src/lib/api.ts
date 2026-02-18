@@ -3,6 +3,99 @@ import { API_CONFIG, UI_CONFIG } from "./constants";
 
 const { BASE_URL: API_BASE_URL, DEBUG, TIMEOUT_MS: API_TIMEOUT_MS } = API_CONFIG;
 
+// ---------------------------------------------------------------------------
+// Token storage
+// ---------------------------------------------------------------------------
+
+const TOKEN_KEY = "hienfeld_access_token";
+const REFRESH_KEY = "hienfeld_refresh_token";
+
+export function getAccessToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+function getRefreshToken(): string | null {
+  return localStorage.getItem(REFRESH_KEY);
+}
+
+export function setTokens(accessToken: string, refreshToken: string): void {
+  localStorage.setItem(TOKEN_KEY, accessToken);
+  localStorage.setItem(REFRESH_KEY, refreshToken);
+}
+
+export function clearTokens(): void {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(REFRESH_KEY);
+}
+
+export function isAuthenticated(): boolean {
+  return getAccessToken() !== null;
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getAccessToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+// ---------------------------------------------------------------------------
+// Auth endpoints
+// ---------------------------------------------------------------------------
+
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  expires_in: number;
+}
+
+export async function login(credentials: LoginRequest): Promise<TokenResponse> {
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(credentials),
+  });
+
+  if (!res.ok) {
+    const detail = await safeParseError(res);
+    throw new Error(detail || "Login mislukt");
+  }
+
+  const data = (await res.json()) as TokenResponse;
+  setTokens(data.access_token, data.refresh_token);
+  return data;
+}
+
+export async function refreshAccessToken(): Promise<void> {
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) {
+    clearTokens();
+    throw new Error("Geen refresh token beschikbaar. Log opnieuw in.");
+  }
+
+  const res = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  });
+
+  if (!res.ok) {
+    clearTokens();
+    throw new Error("Sessie verlopen. Log opnieuw in.");
+  }
+
+  const data = (await res.json()) as TokenResponse;
+  setTokens(data.access_token, data.refresh_token);
+}
+
+export function logout(): void {
+  clearTokens();
+}
+
 export interface StartAnalysisRequest {
   policyFile: File;
   conditionsFiles?: File[];
@@ -109,6 +202,7 @@ export async function startAnalysis(
   try {
     const res = await fetchWithTimeout(`${API_BASE_URL}/api/analyze`, {
       method: "POST",
+      headers: authHeaders(),
       body: formData,
     });
 
@@ -141,7 +235,9 @@ export async function startAnalysis(
 }
 
 export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
-  const res = await fetchWithTimeout(`${API_BASE_URL}/api/status/${jobId}`);
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/status/${jobId}`, {
+    headers: authHeaders(),
+  });
 
   if (res.status === 404) {
     throw new Error("Job niet gevonden (404) - server mogelijk herstart");
@@ -156,7 +252,9 @@ export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
 }
 
 export async function getResults(jobId: string): Promise<AnalysisResultsResponse> {
-  const res = await fetchWithTimeout(`${API_BASE_URL}/api/results/${jobId}`);
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/results/${jobId}`, {
+    headers: authHeaders(),
+  });
 
   if (res.status === 202) {
     throw new Error("Resultaten nog niet beschikbaar");
@@ -171,7 +269,9 @@ export async function getResults(jobId: string): Promise<AnalysisResultsResponse
 }
 
 export async function downloadReport(jobId: string): Promise<void> {
-  const res = await fetchWithTimeout(`${API_BASE_URL}/api/report/${jobId}`);
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/report/${jobId}`, {
+    headers: authHeaders(),
+  });
 
   if (!res.ok) {
     const detail = await safeParseError(res);
