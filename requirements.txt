@@ -29,6 +29,14 @@ PyMuPDF>=1.23.0
 pdfplumber>=0.10.0
 pywin32>=306; sys_platform == 'win32'
 
+# OCR for scanned PDFs (v4.6 - Tesseract fallback)
+pytesseract>=0.3.10
+Pillow>=10.0.0
+# System requirement: tesseract-ocr + tesseract-ocr-nld (Dutch language pack)
+# Linux: apt-get install tesseract-ocr tesseract-ocr-nld
+# Mac: brew install tesseract tesseract-lang
+# Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki
+
 # -------------------------
 # Fast string matching
 # -------------------------

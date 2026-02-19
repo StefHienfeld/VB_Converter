@@ -323,7 +323,65 @@ class PolicyParserService:
             logger.warning("Neither PyMuPDF nor pdfplumber installed")
         except Exception as e:
             logger.error(f"pdfplumber failed: {e}")
-        
+
+        # ============================================================
+        # OCR FALLBACK (NEW v4.6): Tesseract for scanned PDFs
+        # ============================================================
+        # If no text was extracted, try OCR with Tesseract
+        if not page_texts or all(not text.strip() for _, text in page_texts):
+            logger.info("No text extracted from PDF - attempting OCR with Tesseract")
+            try:
+                from PIL import Image
+                import pytesseract
+                import fitz  # Need fitz to convert PDF pages to images
+
+                doc = fitz.open(stream=file_bytes, filetype="pdf")
+                ocr_page_texts = []
+
+                for page_num, page in enumerate(doc):
+                    # Convert PDF page to image
+                    pix = page.get_pixmap(dpi=300)  # Higher DPI for better OCR accuracy
+                    img_bytes = pix.tobytes("png")
+                    img = Image.open(BytesIO(img_bytes))
+
+                    # Perform OCR with Dutch language
+                    # IMPORTANT: Requires 'tesseract-ocr-nld' language pack installed
+                    try:
+                        ocr_text = pytesseract.image_to_string(
+                            img,
+                            lang='nld',  # Dutch language
+                            config='--psm 1'  # Automatic page segmentation with OSD
+                        )
+                    except pytesseract.TesseractNotFoundError:
+                        logger.error("Tesseract not installed - install tesseract-ocr")
+                        raise
+                    except Exception as lang_error:
+                        # Fallback to default language if Dutch pack not available
+                        logger.warning(f"Dutch OCR failed ({lang_error}), trying default language")
+                        ocr_text = pytesseract.image_to_string(
+                            img,
+                            config='--psm 1'
+                        )
+
+                    if ocr_text.strip():
+                        ocr_page_texts.append((page_num + 1, ocr_text))
+
+                doc.close()
+
+                if ocr_page_texts:
+                    logger.info(f"OCR extracted text from {len(ocr_page_texts)} pages")
+                    return self._segment_text_with_pages(ocr_page_texts, filename)
+                else:
+                    logger.warning("OCR found no text in PDF")
+
+            except ImportError as import_err:
+                logger.warning(f"OCR dependencies not available: {import_err}")
+                logger.info("Install: pip install pytesseract Pillow")
+                logger.info("System: apt-get install tesseract-ocr tesseract-ocr-nld (Linux)")
+                logger.info("System: brew install tesseract tesseract-lang (Mac)")
+            except Exception as ocr_error:
+                logger.error(f"OCR processing failed: {ocr_error}")
+
         # Final fallback
         logger.warning("PDF parsing not available - returning placeholder")
         return [PolicyDocumentSection(
