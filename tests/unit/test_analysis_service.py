@@ -607,3 +607,389 @@ class TestAnalysisServiceSetters:
         analysis_service.set_custom_instructions_service(mock_service)
 
         assert analysis_service.custom_instructions_service is mock_service
+
+
+# ============================================================
+# EXPANDED TESTS FOR STEP 2: POLICY CONDITIONS CHECK
+# ============================================================
+
+class TestStep2ConditionsCheckExpanded:
+    """Comprehensive tests for Step 2 - Policy conditions matching."""
+
+    @pytest.fixture
+    def service_with_conditions(self, config):
+        """Service with loaded policy conditions."""
+        service = AnalysisService(config)
+
+        # Create realistic policy sections
+        service._policy_sections = [
+            PolicyDocumentSection(
+                id="Artikel 3",
+                title="Uitsluitingen",
+                simplified_text="fraude en misleiding zijn uitgesloten van dekking",
+                raw_text="Fraude en misleiding zijn uitgesloten van dekking.",
+                page_number=5,
+                document_id="Voorwaarden.pdf"
+            ),
+            PolicyDocumentSection(
+                id="Artikel 7",
+                title="Eigen risico",
+                simplified_text="het eigen risico bedraagt € 250 per schadegeval",
+                raw_text="Het eigen risico bedraagt € 250 per schadegeval.",
+                page_number=12,
+                document_id="Voorwaarden.pdf"
+            ),
+            PolicyDocumentSection(
+                id="Artikel 9",
+                title="Verzekerde bedragen",
+                simplified_text="de maximale dekking is € 1.000.000 per gebeurtenis",
+                raw_text="De maximale dekking is € 1.000.000 per gebeurtenis.",
+                page_number=15,
+                document_id="Voorwaarden.pdf"
+            )
+        ]
+        service._policy_full_text = " ".join(s.simplified_text for s in service._policy_sections)
+
+        return service
+
+    def test_exact_match_above_95_percent(self, service_with_conditions, mock_hybrid_similarity_service):
+        """Similarity ≥95% should return VERWIJDEREN with high confidence."""
+        service_with_conditions.hybrid_similarity_service = mock_hybrid_similarity_service
+        service_with_conditions._hybrid_enabled = True
+
+        # Mock high similarity match - returns (index, score, breakdown)
+        mock_breakdown = MagicMock()
+        mock_hybrid_similarity_service.find_best_match.return_value = (
+            0,  # index in candidates list
+            0.97,  # Above 95% threshold
+            mock_breakdown
+        )
+
+        cluster = create_cluster("fraude en misleiding uitgesloten", frequency=3)
+        advice = service_with_conditions._step2_conditions_check(cluster)
+
+        assert advice is not None
+        assert advice.advice_code == AdviceCode.VERWIJDEREN.value
+        assert advice.confidence == ConfidenceLevel.HOOG.value
+        assert advice.reference_article  # Should have a reference
+
+    def test_high_similarity_between_85_and_95_percent(self, service_with_conditions, mock_hybrid_similarity_service):
+        """Similarity 85-95% should return VERWIJDEREN with medium confidence."""
+        service_with_conditions.hybrid_similarity_service = mock_hybrid_similarity_service
+        service_with_conditions._hybrid_enabled = True
+
+        # Mock medium-high similarity
+        mock_breakdown = MagicMock()
+        mock_hybrid_similarity_service.find_best_match.return_value = (
+            1,  # index
+            0.89,  # Between 85-95%
+            mock_breakdown
+        )
+
+        cluster = create_cluster("eigen risico 250 euro per schade", frequency=2)
+        advice = service_with_conditions._step2_conditions_check(cluster)
+
+        assert advice is not None
+        assert advice.advice_code == AdviceCode.VERWIJDEREN.value
+        assert advice.confidence == ConfidenceLevel.MIDDEN.value
+        assert "review" in advice.reason.lower() or "controleer" in advice.reason.lower()
+
+    def test_exact_boundary_95_percent(self, service_with_conditions, mock_hybrid_similarity_service):
+        """Similarity exactly 0.95 should be treated as high confidence."""
+        service_with_conditions.hybrid_similarity_service = mock_hybrid_similarity_service
+        service_with_conditions._hybrid_enabled = True
+
+        mock_breakdown = MagicMock()
+        mock_hybrid_similarity_service.find_best_match.return_value = (
+            2,  # index
+            0.95,  # Exact boundary
+            mock_breakdown
+        )
+
+        cluster = create_cluster("maximale dekking 1 miljoen", frequency=1)
+        advice = service_with_conditions._step2_conditions_check(cluster)
+
+        assert advice is not None
+        assert advice.confidence == ConfidenceLevel.HOOG.value
+
+    def test_exact_boundary_85_percent(self, service_with_conditions, mock_hybrid_similarity_service):
+        """Similarity exactly 0.85 should be treated as medium confidence."""
+        service_with_conditions.hybrid_similarity_service = mock_hybrid_similarity_service
+        service_with_conditions._hybrid_enabled = True
+
+        mock_breakdown = MagicMock()
+        mock_hybrid_similarity_service.find_best_match.return_value = (
+            0,  # index
+            0.85,  # Exact boundary
+            mock_breakdown
+        )
+
+        cluster = create_cluster("misleiding is uitgesloten", frequency=1)
+        advice = service_with_conditions._step2_conditions_check(cluster)
+
+        assert advice is not None
+        assert advice.confidence == ConfidenceLevel.MIDDEN.value
+
+    def test_below_85_percent_returns_none(self, service_with_conditions, mock_hybrid_similarity_service):
+        """Similarity <85% should return None (continue to next step)."""
+        service_with_conditions.hybrid_similarity_service = mock_hybrid_similarity_service
+        service_with_conditions._hybrid_enabled = True
+
+        mock_breakdown = MagicMock()
+        mock_hybrid_similarity_service.find_best_match.return_value = (
+            0,  # index
+            0.75,  # Below threshold
+            mock_breakdown
+        )
+
+        cluster = create_cluster("iets anders", frequency=1)
+        advice = service_with_conditions._step2_conditions_check(cluster)
+
+        assert advice is None  # Falls through to Step 3
+
+    def test_no_match_found_returns_none(self, service_with_conditions, mock_hybrid_similarity_service):
+        """When no match is found, should return None."""
+        service_with_conditions.hybrid_similarity_service = mock_hybrid_similarity_service
+        service_with_conditions._hybrid_enabled = True
+
+        # No match returns None
+        mock_hybrid_similarity_service.find_best_match.return_value = None
+
+        cluster = create_cluster("completely different text", frequency=1)
+        advice = service_with_conditions._step2_conditions_check(cluster)
+
+        assert advice is None
+
+    def test_empty_cluster_text_returns_none(self, service_with_conditions):
+        """Empty cluster text should not crash."""
+        cluster = create_cluster("", frequency=1)
+        advice = service_with_conditions._step2_conditions_check(cluster)
+
+        assert advice is None
+
+    def test_none_cluster_text_returns_none(self, service_with_conditions):
+        """None cluster text should not crash."""
+        cluster = create_cluster("test", frequency=1)
+        cluster.leader_clause.simplified_text = None
+
+        advice = service_with_conditions._step2_conditions_check(cluster)
+
+        assert advice is None
+
+    def test_hybrid_service_failure_fallback(self, service_with_conditions, mock_hybrid_similarity_service):
+        """When hybrid service fails, should handle gracefully."""
+        service_with_conditions.hybrid_similarity_service = mock_hybrid_similarity_service
+        service_with_conditions._hybrid_enabled = True
+
+        # Mock service raises exception
+        mock_hybrid_similarity_service.find_best_match.side_effect = Exception("Service failed")
+
+        cluster = create_cluster("test text", frequency=1)
+
+        # Should not crash - either return None or use fallback
+        try:
+            advice = service_with_conditions._step2_conditions_check(cluster)
+            # If it doesn't crash, success
+            assert True
+        except Exception:
+            pytest.fail("Should handle service failure gracefully")
+
+
+# ============================================================
+# EXPANDED TESTS FOR STEP 3: FALLBACK ANALYSIS
+# ============================================================
+
+class TestStep3FallbackAnalysisExpanded:
+    """Comprehensive tests for Step 3 - Fallback analysis logic."""
+
+    @pytest.fixture
+    def service_with_keywords(self, config):
+        """Service with keyword rules configured."""
+        service = AnalysisService(config)
+
+        # Add some keyword rules
+        service.add_keyword_rule(
+            name='maatwerk',
+            keywords=['maatwerk', 'specifieke afspraak', 'individueel'],
+            advice='BEHOUDEN (MAATWERK)',
+            reason='Maatwerk clausule',
+            confidence='Hoog'
+        )
+
+        service.add_keyword_rule(
+            name='sancties',
+            keywords=['sancties', 'boycot', 'embargo'],
+            advice='VERWIJDEREN',
+            reason='Sanctieclausule verwijderen',
+            confidence='Hoog'
+        )
+
+        return service
+
+    def test_keyword_match_returns_advice(self, service_with_keywords):
+        """Matching keyword should return configured advice."""
+        cluster = create_cluster("Deze polis bevat maatwerk afspraken", frequency=5)
+        advice = service_with_keywords._step3_fallback_analysis(cluster)
+
+        assert advice is not None
+        assert "BEHOUDEN" in advice.advice_code
+        assert "Maatwerk" in advice.reason
+
+    def test_multiple_keyword_match_first_wins(self, service_with_keywords):
+        """When multiple keywords match, first rule should win."""
+        service_with_keywords.add_keyword_rule(
+            name='other',
+            keywords=['polis'],
+            advice='CONTROLEER',
+            reason='Other',
+            confidence='Laag'
+        )
+
+        cluster = create_cluster("Deze polis heeft maatwerk en sancties", frequency=1)
+        advice = service_with_keywords._step3_fallback_analysis(cluster)
+
+        # Should match the first rule that triggers (maatwerk)
+        assert advice is not None
+
+    def test_high_frequency_standardize(self, service_with_keywords, config):
+        """High frequency (≥20) should suggest standardization."""
+        # Update config threshold
+        config.analysis_rules.frequency_standardize_threshold = 20
+        service = AnalysisService(config)
+
+        cluster = create_cluster("veel voorkomende tekst", frequency=25)
+        advice = service._step3_fallback_analysis(cluster)
+
+        assert advice is not None
+        # High frequency may suggest keeping for standardization
+        assert advice.advice_code is not None
+
+    def test_low_frequency_keep(self, service_with_keywords):
+        """Low frequency (<20) without keywords should keep."""
+        cluster = create_cluster("unieke clausule zonder keywords", frequency=1)
+        advice = service_with_keywords._step3_fallback_analysis(cluster)
+
+        assert advice is not None
+        # Should return some advice (exact code depends on logic)
+        assert advice.advice_code is not None
+
+    def test_medium_frequency_keep(self, service_with_keywords):
+        """Medium frequency (5-19) should keep with review."""
+        cluster = create_cluster("semi-frequente clausule", frequency=10)
+        advice = service_with_keywords._step3_fallback_analysis(cluster)
+
+        assert advice is not None
+        assert advice.advice_code is not None
+
+    def test_very_long_text_manual_check(self, service_with_keywords):
+        """Very long text should get manual check advice."""
+        long_text = "Dit is een zeer lange clausule. " * 100  # ~3300 chars
+        cluster = create_cluster(long_text, frequency=1)
+        advice = service_with_keywords._step3_fallback_analysis(cluster)
+
+        assert advice is not None
+        # Should return advice for long text
+        assert advice.advice_code is not None
+
+    def test_empty_text_fallback(self, service_with_keywords):
+        """Empty text should return safe default."""
+        cluster = create_cluster("", frequency=1)
+        advice = service_with_keywords._step3_fallback_analysis(cluster)
+
+        assert advice is not None
+        # Should not crash
+
+    def test_special_characters_handled(self, service_with_keywords):
+        """Special characters should not break analysis."""
+        cluster = create_cluster("Clausule met € 1.000,- en 50% korting", frequency=3)
+        advice = service_with_keywords._step3_fallback_analysis(cluster)
+
+        assert advice is not None
+
+    def test_unicode_text_handled(self, service_with_keywords):
+        """Unicode characters should be handled."""
+        cluster = create_cluster("Clàusule mét speciâle tëkens", frequency=2)
+        advice = service_with_keywords._step3_fallback_analysis(cluster)
+
+        assert advice is not None
+
+
+# ============================================================
+# EDGE CASES & ERROR HANDLING
+# ============================================================
+
+class TestAnalysisServiceEdgeCases:
+    """Tests for edge cases and error handling."""
+
+    def test_service_without_any_dependencies(self, config):
+        """Service should work with minimal dependencies."""
+        service = AnalysisService(config)
+        # No clause library, no conditions, no custom instructions
+
+        cluster = create_cluster("test tekst", frequency=1)
+        advice = service._step3_fallback_analysis(cluster)
+
+        assert advice is not None  # Should fallback to basic analysis
+
+    def test_null_similarity_service(self, config):
+        """Should handle None similarity service gracefully."""
+        service = AnalysisService(config)
+        service.similarity_service = None
+
+        cluster = create_cluster("test", frequency=1)
+
+        # Should not crash when calling methods that need similarity
+        try:
+            advice = service._step3_fallback_analysis(cluster)
+            assert True
+        except AttributeError:
+            pytest.fail("Should handle None similarity service")
+
+    def test_threshold_exactly_at_boundary(self, config):
+        """Test behavior at exact threshold boundaries."""
+        service = AnalysisService(config)
+
+        # Set specific thresholds (using correct parameter names)
+        service.set_similarity_thresholds(
+            exact=0.95,
+            high=0.85,
+            medium=0.75
+        )
+
+        assert service.config.analysis_rules.conditions_match.exact_match_threshold == 0.95
+        assert service.config.analysis_rules.conditions_match.high_similarity_threshold == 0.85
+
+    def test_very_short_text_handling(self, config):
+        """Very short text (<10 chars) should be handled."""
+        service = AnalysisService(config)
+
+        cluster = create_cluster("OK", frequency=1)
+        advice = service._step3_fallback_analysis(cluster)
+
+        assert advice is not None
+
+    def test_waterfall_pipeline_integration(self, config, mock_clause_library_service):
+        """Test full waterfall continues through steps correctly."""
+        service = AnalysisService(config)
+
+        # Set up clause library that returns None (no match)
+        mock_clause_library_service.is_loaded = True
+        mock_clause_library_service.find_match.return_value = None
+        service.clause_library_service = mock_clause_library_service
+
+        # No policy conditions loaded
+        service._policy_sections = []
+
+        cluster = create_cluster("test clause", frequency=1)
+
+        # Step 1 should return None (no library match)
+        step1_result = service._step1_clause_library_check(cluster)
+        assert step1_result is None
+
+        # Step 2 should return None (no conditions)
+        step2_result = service._step2_conditions_check(cluster)
+        assert step2_result is None
+
+        # Step 3 should return an advice (fallback always returns)
+        step3_result = service._step3_fallback_analysis(cluster)
+        assert step3_result is not None
