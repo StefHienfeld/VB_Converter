@@ -179,9 +179,9 @@ class AnalysisService:
 
         # Analysis pipeline (v4.5 - Strategy pattern)
         self._pipeline: Optional["AnalysisPipeline"] = None
-        # Feature flag: disabled by default until strategies have full parity
-        # Enable via: analysis_service._use_pipeline = True
-        self._use_pipeline = False
+        # Feature flag: enabled now that strategies have full parity
+        # Disable via: analysis_service._use_pipeline = False
+        self._use_pipeline = PIPELINE_AVAILABLE
 
     @property
     def pipeline(self) -> Optional["AnalysisPipeline"]:

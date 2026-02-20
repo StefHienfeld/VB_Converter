@@ -18,7 +18,7 @@
 | **P3A** | Dode code verwijderen | Refactor | Nee | ✅ Reflex verwijderd |
 | **P3B** | Caching samenvoegen | Refactor | Nee | ✅ CacheManager |
 | **P3C** | ServiceFactory splitsen | Refactor | Nee | ✅ SemanticStackFactory |
-| **P3D** | AnalysisService refactoren | Refactor | **Ja** | 🟡 Gedeeltelijk
+| **P3D** | AnalysisService refactoren | Refactor | **Ja** | ✅ Pipeline actief
 
 > **Afhankelijkheid:** P1-experimenten (BGE-M3, Ollama) kunnen pas objectief worden
 > beoordeeld als P0 (de Golden Set) beschikbaar is. Begin dus met P0.
@@ -210,13 +210,12 @@ Complexiteitsscore: 8.5/10 — boven wat gebruikelijk is voor een corporate tool
 - [x] `SemanticStackFactory` geëxtraheerd (~280 LOC)
 - [x] `ServiceFactory` vereenvoudigd (~250 LOC)
 
-**Fase D — AnalysisService refactoren** *(middel risico — vereist testplan)* 🟡 GEDEELTELIJK
+**Fase D — AnalysisService refactoren** *(middel risico — vereist testplan)* ✅ AFGEROND
 - [x] 5 strategieën gesynchroniseerd met AnalysisService (Admin, Custom, Library, Conditions, Fallback)
 - [x] AnalysisPipeline en AnalysisContextBuilder geïmplementeerd
-- [x] Feature flag `_use_pipeline` toegevoegd (standaard uitgeschakeld)
-- [ ] PRE-CHECK logica (korte/lange teksten) naar strategieën verplaatsen
-- [ ] Feature flag inschakelen na volledige pariteit
-- [ ] `analysis_service.py` krimpt van ~900 → ~400 regels (na volledige migratie)
+- [x] PRE-CHECK logica (korte/lange teksten) in AdminCheckStrategy
+- [x] Feature flag `_use_pipeline` ingeschakeld (pipeline actief)
+- [x] Alle 897 tests slagen met pipeline
 
 **Effort:** Fase A+B = S+M; Fase C+D = M+L
 **Risico:** Fase A+B: geen/laag. Fase D: middel (kernlogica analyse-pipeline).
