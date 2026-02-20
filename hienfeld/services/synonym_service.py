@@ -83,18 +83,18 @@ class SynonymService:
         try:
             import wn
             
-            # Try to load Dutch WordNet
+            # Try to load Dutch WordNet (omw-nl is the correct project ID)
             try:
                 # Check if Dutch WordNet is downloaded
-                self._wordnet = wn.Wordnet('odwn:nl')
+                self._wordnet = wn.Wordnet('omw-nl')
                 self._wordnet_available = True
                 logger.info("Open Dutch WordNet loaded successfully")
             except wn.Error:
                 # Try to download it
                 try:
                     logger.info("Downloading Open Dutch WordNet...")
-                    wn.download('odwn:nl')
-                    self._wordnet = wn.Wordnet('odwn:nl')
+                    wn.download('omw-nl:1.4')
+                    self._wordnet = wn.Wordnet('omw-nl')
                     self._wordnet_available = True
                     logger.info("Open Dutch WordNet downloaded and loaded")
                 except Exception as e:
