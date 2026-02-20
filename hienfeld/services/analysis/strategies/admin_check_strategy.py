@@ -67,33 +67,11 @@ class AdminCheckStrategy(IAnalysisStrategy):
         if not context.admin_check_service:
             return None
 
-        text = cluster.leader_text
+        # Perform admin check - returns (AdminCheckResult, Optional[AnalysisAdvice])
+        result, advice = context.admin_check_service.check_cluster(cluster)
 
-        # Perform admin check
-        result = context.admin_check_service.check_text(text)
+        if advice is not None:
+            logger.debug(f"Admin check: {cluster.id} -> {advice.advice_code}")
+            return advice
 
-        if not result.has_issues:
-            return None
-
-        # Map admin issue to advice
-        recommendation = result.recommendation
-        if recommendation is None:
-            return None
-
-        # Get the primary issue description
-        primary_issue = result.primary_issue
-        reason = primary_issue.description if primary_issue else "Administratief probleem gedetecteerd"
-
-        advice = AnalysisAdvice(
-            cluster_id=cluster.id,
-            advice_code=recommendation.value,
-            reason=reason,
-            confidence=ConfidenceLevel.HOOG.value,
-            reference_article="-",
-            category="ADMIN",
-            cluster_name=cluster.name,
-            frequency=cluster.frequency,
-        )
-
-        logger.debug(f"Admin check: {cluster.id} -> {recommendation.value}")
-        return advice
+        return None

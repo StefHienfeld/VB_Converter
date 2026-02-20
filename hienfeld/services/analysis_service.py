@@ -36,6 +36,14 @@ try:
 except ImportError:
     RERANKING_AVAILABLE = False
 
+# Analysis pipeline (v4.5 - Strategy pattern refactor)
+try:
+    from ..services.analysis.analysis_pipeline import AnalysisPipeline
+    from ..services.analysis.analysis_context import AnalysisContextBuilder
+    PIPELINE_AVAILABLE = True
+except ImportError:
+    PIPELINE_AVAILABLE = False
+
 logger = get_logger('analysis_service')
 
 
@@ -168,6 +176,66 @@ class AnalysisService:
             'score_improvements': 0,
             'avg_score_boost': 0.0
         }
+
+        # Analysis pipeline (v4.5 - Strategy pattern)
+        self._pipeline: Optional["AnalysisPipeline"] = None
+        # Feature flag: disabled by default until strategies have full parity
+        # Enable via: analysis_service._use_pipeline = True
+        self._use_pipeline = False
+
+    @property
+    def pipeline(self) -> Optional["AnalysisPipeline"]:
+        """
+        Get or create the analysis pipeline with default strategies.
+
+        Returns:
+            AnalysisPipeline if available, None otherwise
+        """
+        if not PIPELINE_AVAILABLE:
+            return None
+
+        if self._pipeline is None:
+            self._pipeline = AnalysisPipeline.create_default()
+            logger.debug(f"Created analysis pipeline: {self._pipeline}")
+
+        return self._pipeline
+
+    def _build_analysis_context(self) -> "AnalysisContextBuilder":
+        """
+        Build an AnalysisContext from the current service state.
+
+        Returns:
+            AnalysisContextBuilder ready to build()
+        """
+        if not PIPELINE_AVAILABLE:
+            raise RuntimeError("Pipeline not available")
+
+        return AnalysisContextBuilder.from_analysis_service(self)
+
+    def _update_stats_from_advice(self, advice: AnalysisAdvice, stats: dict) -> None:
+        """
+        Update statistics dictionary based on advice category.
+
+        Maps pipeline advice categories back to the stats keys used
+        by the legacy waterfall code.
+
+        Args:
+            advice: The generated advice
+            stats: Stats dictionary to update
+        """
+        category = advice.category or ""
+
+        # Map categories to stats keys
+        if category.startswith("ADMIN"):
+            stats['step0_admin_issues'] = stats.get('step0_admin_issues', 0) + 1
+        elif category == "CUSTOM_INSTRUCTION":
+            stats['step05_custom_instructions'] = stats.get('step05_custom_instructions', 0) + 1
+        elif category.startswith("LIBRARY_"):
+            stats['step1_library_match'] = stats.get('step1_library_match', 0) + 1
+        elif category.startswith("CONDITIONS_"):
+            stats['step2_conditions_match'] = stats.get('step2_conditions_match', 0) + 1
+        else:
+            stats['step3_fallback'] = stats.get('step3_fallback', 0) + 1
 
     def _format_section_reference(self, section: PolicyDocumentSection) -> str:
         """
@@ -570,6 +638,18 @@ class AnalysisService:
         Returns:
             AnalysisAdvice for this cluster
         """
+        # Use strategy pipeline if available and enabled (v4.5)
+        if self._use_pipeline and self.pipeline is not None:
+            try:
+                context = self._build_analysis_context().build()
+                advice = self.pipeline.analyze_cluster(cluster, context)
+                # Update stats based on advice category
+                self._update_stats_from_advice(advice, stats)
+                return advice
+            except Exception as e:
+                logger.warning(f"Pipeline failed for cluster {cluster.id}, falling back: {e}")
+                # Fall through to legacy waterfall
+
         import time
         text = cluster.original_text
         simple_text = cluster.leader_text
