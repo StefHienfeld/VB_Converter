@@ -69,3 +69,26 @@ faiss-cpu>=1.7.4
 # Rate limiting
 # -------------------------
 slowapi
+
+# -------------------------
+# Authentication (JWT + password hashing)
+# -------------------------
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+
+# -------------------------
+# Database (Fase 1.1)
+# -------------------------
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0   # PostgreSQL driver
+alembic>=1.13.0           # Database migrations
+
+# -------------------------
+# Monitoring / Metrics
+# -------------------------
+prometheus-client>=0.19.0
+
+# -------------------------
+# BM25 pre-filter (v3.5 - terminology matching)
+# -------------------------
+rank-bm25>=0.2.2
