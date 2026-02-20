@@ -533,9 +533,11 @@ async def download_report(
 
 
 @app.post("/api/test-custom-instructions")
+@limiter.limit("5/minute")
 def test_custom_instructions(
-    instructions_text: str = Form(...),
-    test_clause: str = Form(...),
+    request: Request,
+    instructions_text: str = Form(..., max_length=50_000),
+    test_clause: str = Form(..., max_length=10_000),
     _current_user: str = Depends(_require_auth),
 ):
     """

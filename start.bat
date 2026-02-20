@@ -16,12 +16,12 @@ goto :use_system
 
 :use_venv
 echo    Using virtual environment (.venv)...
-start "Backend - FastAPI" cmd /k "cd /d %~dp0 && call .venv\Scripts\activate.bat && uvicorn hienfeld_api.app:app --reload --port 8000"
+start "Backend - FastAPI" cmd /k "cd /d %~dp0 && call .venv\Scripts\activate.bat && set PYTHONIOENCODING=utf-8 && chcp 65001 >nul && uvicorn hienfeld_api.app:app --reload --port 8000"
 goto :backend_done
 
 :use_system
 echo    Using system Python...
-start "Backend - FastAPI" cmd /k "cd /d %~dp0 && uvicorn hienfeld_api.app:app --reload --port 8000"
+start "Backend - FastAPI" cmd /k "cd /d %~dp0 && set PYTHONIOENCODING=utf-8 && chcp 65001 >nul && uvicorn hienfeld_api.app:app --reload --port 8000"
 goto :backend_done
 
 :backend_done

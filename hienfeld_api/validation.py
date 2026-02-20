@@ -138,12 +138,20 @@ async def validate_file_upload(
     mime_type = detect_mime_type_basic(file_bytes, ext)
 
     if mime_type not in limits.allowed_mimes:
-        logger.warning(f"MIME type mismatch: {mime_type} for file with extension {ext}")
-        # Allow it but log warning - some CSV files detected as text/plain
-        # raise HTTPException(
-        #     status_code=400,
-        #     detail=f"File content doesn't match extension. Detected: {mime_type}"
-        # )
+        # Strict MIME validation for security
+        # Allow text/plain for CSV files as fallback (common detection issue)
+        if mime_type == "text/plain" and ext == ".csv":
+            logger.debug(f"CSV file detected as text/plain - allowed as fallback")
+        elif mime_type == "application/octet-stream":
+            # Generic binary - log warning but allow (some valid files detected this way)
+            logger.warning(f"MIME type unknown (octet-stream) for file with extension {ext}")
+        else:
+            analysis_errors_total.labels(error_type="validation").inc()
+            logger.warning(f"MIME type mismatch: {mime_type} for file with extension {ext}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Bestandsinhoud komt niet overeen met extensie. Gedetecteerd: {mime_type}, verwacht voor {ext}"
+            )
 
     logger.info(
         f"✅ File validated: {sanitized} "
@@ -170,7 +178,7 @@ def detect_mime_type_basic(file_bytes: bytes, extension: str) -> str:
     if len(file_bytes) < 4:
         return 'application/octet-stream'
 
-    # Excel XLSX (ZIP file starting with PK)
+    # Excel XLSX / Word DOCX (ZIP file starting with PK)
     if file_bytes[:4] == b'PK\x03\x04':
         if extension in ['.xlsx', '.docx']:
             if extension == '.xlsx':
@@ -182,9 +190,11 @@ def detect_mime_type_basic(file_bytes: bytes, extension: str) -> str:
     if file_bytes[:4] == b'%PDF':
         return 'application/pdf'
 
-    # Excel XLS (OLE2 format)
+    # OLE2 format (legacy Office: .xls, .doc)
     if file_bytes[:8] == b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1':
-        return 'application/vnd.ms-excel'
+        if extension == '.doc':
+            return 'application/msword'
+        return 'application/vnd.ms-excel'  # .xls
 
     # CSV / Text (check for printable ASCII/UTF-8)
     try:

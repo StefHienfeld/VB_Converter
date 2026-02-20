@@ -10,26 +10,28 @@ interface FloatingHeaderProps {
 
 export const FloatingHeader = ({ onSettingsClick, onHelpClick }: FloatingHeaderProps) => {
   return (
-    <header className="container max-w-7xl mx-auto mt-6 mb-8 px-4 animate-slide-down">
-      <div className="relative flex items-center justify-between h-20 bg-card/80 backdrop-blur-md rounded-xl border border-border/50 px-6 shadow-sm">
+    <header className="container max-w-7xl mx-auto mt-6 mb-8 px-4 animate-slide-down relative z-20">
+      <div className="relative flex items-center justify-between h-20 floating-card px-6">
         {/* Left: Logo */}
         <div className="flex items-center gap-3 z-10">
-          <img 
-            src={hienfeldLogo} 
-            alt="Hienfeld Logo" 
-            className="h-12 w-auto"
+          <img
+            src={hienfeldLogo}
+            alt="Hienfeld Logo"
+            className="h-11 w-auto"
           />
         </div>
 
         {/* Center: Title */}
         <div className="absolute left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2">
-          <h1 className="text-xl font-bold text-foreground tracking-tight whitespace-nowrap">
-            VB Converter
+          <h1 className="text-xl font-bold tracking-tight whitespace-nowrap">
+            <span className="bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent">
+              VB Converter
+            </span>
           </h1>
         </div>
 
         {/* Right: Actions */}
-        <div className="flex items-center gap-2 z-10">
+        <nav className="flex items-center gap-1 z-10" aria-label="Acties">
           <Button
             variant="ghost"
             size="icon"
@@ -51,7 +53,7 @@ export const FloatingHeader = ({ onSettingsClick, onHelpClick }: FloatingHeaderP
           >
             <Settings className="w-5 h-5 text-muted-foreground" aria-hidden="true" />
           </Button>
-        </div>
+        </nav>
       </div>
     </header>
   );

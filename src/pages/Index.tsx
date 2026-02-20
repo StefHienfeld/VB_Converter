@@ -23,13 +23,20 @@ const Index = () => {
   const analysis = useAnalysis();
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background relative">
+      {/* Ambient Background - SIVI-inspired gradient orbs */}
+      <div className="ambient-bg" aria-hidden="true">
+        <div className="gradient-orb orb-1" />
+        <div className="gradient-orb orb-2" />
+        <div className="gradient-orb orb-3" />
+      </div>
+
       <FloatingHeader
         onSettingsClick={() => setSettingsOpen(true)}
         onHelpClick={() => setHelpOpen(true)}
       />
 
-      <main className="container max-w-7xl mx-auto px-4 pb-12">
+      <main className="container max-w-7xl mx-auto px-4 pb-12 relative z-10">
         {/* Input Section */}
         <div className="transition-all duration-700 ease-in-out">
           <FileUploadSection

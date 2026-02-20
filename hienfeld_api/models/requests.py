@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, field_validator
 class FileUploadLimits(BaseModel):
     """Constraints for file uploads."""
     max_file_size: int = 50 * 1024 * 1024  # 50 MB
-    allowed_extensions: Set[str] = {".xlsx", ".xls", ".csv", ".pdf", ".docx", ".txt"}
+    allowed_extensions: Set[str] = {".xlsx", ".xls", ".csv", ".pdf", ".docx", ".doc", ".txt"}
     allowed_mimes: Set[str] = {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "application/vnd.ms-excel",
@@ -25,6 +25,7 @@ class FileUploadLimits(BaseModel):
         "text/plain",
         "application/pdf",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",  # .doc (legacy Word)
         "application/octet-stream",  # fallback for files we can't detect
     }
 

@@ -76,7 +76,7 @@ function ConfidenceText({ confidence }: { confidence: string }) {
 }
 
 /** Mobile card layout — shown on screens < md */
-function MobileCard({ row, adviceCode, badgeClass, label }: RowData) {
+function MobileCard({ row, adviceCode: _adviceCode, badgeClass, label }: RowData) {
   return (
     <article
       className="rounded-xl border border-border/50 bg-card p-4 space-y-3"
@@ -169,7 +169,7 @@ export const ResultsTable = ({ data, className }: ResultsTableProps) => {
             </tr>
           </thead>
           <tbody className="divide-y divide-border/50">
-            {rows.map(({ row, adviceCode, badgeClass, label }) => (
+            {rows.map(({ row, adviceCode: _adviceCode, badgeClass, label }) => (
               <tr key={row.cluster_id} className="table-row-hover">
                 <td className="px-6 py-4">
                   <span className="text-sm font-medium text-foreground">
