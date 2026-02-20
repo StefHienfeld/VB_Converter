@@ -14,7 +14,7 @@
 
 ```bash
 # 1. Go to https://platform.openai.com/account/api-keys
-# 2. Find and delete: sk-proj-N7dCeBtnGIAxdhGb1AawOYvM20HT-...
+# 2. Find and delete the exposed key (already revoked)
 # 3. Generate new API key
 # 4. Update in vault/secrets manager only (NOT in git)
 

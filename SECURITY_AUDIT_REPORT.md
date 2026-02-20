@@ -34,7 +34,7 @@ The Hienfeld VB Converter is a well-architected insurance policy analysis platfo
 **Finding:**
 The file `.env` contains a real OpenAI API key exposed in version control:
 ```
-OPENAI_API_KEY=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
+OPENAI_API_KEY=sk-proj-REVOKED-KEY-ROTATED
 ```
 
 **Location:** `C:\Users\Stef\Desktop\Vb agent\.env` (line 9)
@@ -50,7 +50,7 @@ OPENAI_API_KEY=sk-proj-N7dCeBtnGIAxdhGb1AawOYvM20HT-pgTvGThttmHcZII8P_rhboSkG2IB
 **Remediation Steps (URGENT):**
 
 1. **Immediate:** Revoke the API key in OpenAI dashboard (https://platform.openai.com/account/api-keys)
-   - Delete: `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`
+   - Delete: `sk-proj-REVOKED-KEY-ROTATED`
    - Estimated time: 5 minutes
 
 2. **Urgent:** Clean git history

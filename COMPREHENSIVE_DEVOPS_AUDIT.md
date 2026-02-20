@@ -871,7 +871,7 @@ ENV PYTHONUNBUFFERED=1
 **File: .env (EXPOSED IN GIT)**
 
 ```env
-OPENAI_API_KEY=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
+OPENAI_API_KEY=sk-proj-REVOKED-KEY-ROTATED
 SECRET_KEY=dev-only-change-in-production-openssl-rand-hex-32
 ```
 
