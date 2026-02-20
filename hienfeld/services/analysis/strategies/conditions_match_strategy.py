@@ -3,8 +3,14 @@
 Step 2: Policy Conditions Matching Strategy.
 
 Matches cluster text against parsed policy conditions (voorwaarden).
-This is the main analysis step that uses hybrid similarity to find
+This is the main analysis step that uses multiple strategies to find
 matching policy sections and generate appropriate recommendations.
+
+Strategies (in order):
+1. Exact substring match - checks if text appears verbatim in conditions
+2. Fuzzy match per section - uses hybrid similarity with thresholds
+3. Fragment matching - checks significant phrases against conditions
+4. Semantic matching - uses embeddings to find same-meaning text
 
 Uses HybridSimilarityService for multi-method matching:
 - RapidFuzz (fuzzy string matching)
@@ -12,9 +18,11 @@ Uses HybridSimilarityService for multi-method matching:
 - TF-IDF (document similarity)
 - Synonyms (domain-specific term matching)
 - Embeddings (semantic similarity)
+
+SYNCED with AnalysisService._step2_conditions_check (v4.5)
 """
 
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Any
 
 from hienfeld.domain.cluster import Cluster
 from hienfeld.domain.analysis import AnalysisAdvice, AdviceCode, ConfidenceLevel
@@ -25,19 +33,27 @@ from hienfeld.logging_config import get_logger
 
 logger = get_logger("strategy.conditions_match")
 
+# Thresholds (should match config.analysis_rules.conditions_match)
+EXACT_MATCH_THRESHOLD = 0.95
+HIGH_SIMILARITY_THRESHOLD = 0.85
+MEDIUM_SIMILARITY_THRESHOLD = 0.75
+SEMANTIC_MATCH_THRESHOLD = 0.70
+SEMANTIC_HIGH_THRESHOLD = 0.85
+
 
 class ConditionsMatchStrategy(IAnalysisStrategy):
     """
     Strategy for Step 2: Policy Conditions Matching.
 
-    Compares cluster text against policy conditions using hybrid
-    similarity to find the best matching section.
+    Compares cluster text against policy conditions using multiple
+    strategies to find the best matching section.
 
-    Thresholds (from config):
-    - >= 95%: VERWIJDEREN (exact match)
-    - >= 85%: VERWIJDEREN + check (high similarity)
+    Thresholds:
+    - >= 95%: VERWIJDEREN (exact match, high confidence)
+    - >= 85%: VERWIJDEREN (high similarity, medium confidence)
     - >= 75%: HANDMATIG CHECKEN (medium similarity)
-    - < 75%: No match (continue to fallback)
+    - >= 50%: HANDMATIG CHECKEN (semantic possible match)
+    - < 50%: No match (continue to fallback)
     """
 
     def __init__(self) -> None:
@@ -66,9 +82,7 @@ class ConditionsMatchStrategy(IAnalysisStrategy):
         context: AnalysisContext
     ) -> Optional[AnalysisAdvice]:
         """
-        Match cluster against policy conditions.
-
-        Uses hybrid similarity to find the best matching policy section.
+        Match cluster against policy conditions using 4 strategies.
 
         Args:
             cluster: Cluster to analyze
@@ -80,71 +94,284 @@ class ConditionsMatchStrategy(IAnalysisStrategy):
         if not context.policy_sections:
             return None
 
-        text = cluster.leader_text
-        config = context.config
-
-        # Get thresholds
-        exact_threshold = config.conditions_match.exact_match_threshold  # 0.95
-        high_threshold = config.conditions_match.high_similarity_threshold  # 0.85
-        medium_threshold = config.conditions_match.medium_similarity_threshold  # 0.75
-
-        # Find best matching section
-        best_match, score = self._find_best_match(text, context)
-
-        if best_match is None or score < medium_threshold:
-            # No match above threshold
+        simple_text = cluster.leader_text
+        if not simple_text or len(simple_text) < 20:
             return None
 
-        # Determine advice based on score
-        if score >= exact_threshold:
-            advice_code = AdviceCode.VERWIJDEREN.value
-            confidence = ConfidenceLevel.HOOG.value
-            reason_prefix = "Exacte match"
-        elif score >= high_threshold:
-            advice_code = AdviceCode.VERWIJDEREN.value
-            confidence = ConfidenceLevel.MIDDEN.value
-            reason_prefix = "Hoge overeenkomst"
-        else:
-            # Medium similarity
-            advice_code = AdviceCode.HANDMATIG_CHECKEN.value
-            confidence = ConfidenceLevel.LAAG.value
-            reason_prefix = "Gedeeltelijke overeenkomst"
+        # Strategy 1: Exact substring match
+        advice = self._strategy1_exact_substring(cluster, simple_text, context)
+        if advice:
+            return advice
 
-        # Format reference
-        reference = self._reference_formatter.format_reference(best_match)
-        category = self._extract_category(best_match)
+        # Strategy 2: Fuzzy match per section
+        advice = self._strategy2_fuzzy_match(cluster, simple_text, context)
+        if advice:
+            return advice
 
-        # Build reason
-        reason = f"{reason_prefix} ({score:.0%}) met {reference}"
+        # Strategy 3: Fragment matching
+        advice = self._strategy3_fragment_match(cluster, simple_text, context)
+        if advice:
+            return advice
 
-        advice = AnalysisAdvice(
+        # Strategy 4: Semantic matching
+        advice = self._strategy4_semantic_match(cluster, simple_text, context)
+        if advice:
+            return advice
+
+        return None
+
+    def _strategy1_exact_substring(
+        self,
+        cluster: Cluster,
+        text: str,
+        context: AnalysisContext
+    ) -> Optional[AnalysisAdvice]:
+        """
+        Strategy 1: Check if text appears exactly in conditions.
+
+        This is the fastest check - if the exact text appears somewhere
+        in the policy conditions, it's definitely covered.
+        """
+        if not context.policy_full_text:
+            return None
+
+        if text not in context.policy_full_text:
+            return None
+
+        # Find which section contains this text
+        matching_section = self._find_section_containing_text(text, context)
+
+        if not matching_section:
+            # Text spans section boundaries, fall back to fuzzy match
+            return None
+
+        reference = self._reference_formatter.format_reference(matching_section)
+
+        return AnalysisAdvice(
             cluster_id=cluster.id,
-            advice_code=advice_code,
-            reason=reason,
-            confidence=confidence,
+            advice_code=AdviceCode.VERWIJDEREN.value,
+            reason="Tekst komt EXACT voor in de voorwaarden. Kan verwijderd worden.",
+            confidence=ConfidenceLevel.HOOG.value,
             reference_article=reference,
-            category=category,
+            category="CONDITIONS_EXACT",
             cluster_name=cluster.name,
-            frequency=cluster.frequency,
+            frequency=cluster.frequency
         )
 
-        logger.debug(f"Conditions match: {cluster.id} -> {reference} ({score:.0%})")
-        return advice
+    def _strategy2_fuzzy_match(
+        self,
+        cluster: Cluster,
+        text: str,
+        context: AnalysisContext
+    ) -> Optional[AnalysisAdvice]:
+        """
+        Strategy 2: Fuzzy match against each section.
 
-    def _find_best_match(
+        Uses hybrid similarity (if available) or base similarity
+        to find the best matching section.
+        """
+        best_match = self._find_best_section_match(text, context)
+
+        if not best_match:
+            return None
+
+        score, section = best_match
+        reference = self._reference_formatter.format_reference(section)
+
+        # Get thresholds from config
+        config = context.config
+        exact_threshold = getattr(
+            config.conditions_match, 'exact_match_threshold', EXACT_MATCH_THRESHOLD
+        )
+        high_threshold = getattr(
+            config.conditions_match, 'high_similarity_threshold', HIGH_SIMILARITY_THRESHOLD
+        )
+        medium_threshold = getattr(
+            config.conditions_match, 'medium_similarity_threshold', MEDIUM_SIMILARITY_THRESHOLD
+        )
+
+        if score >= exact_threshold:
+            return AnalysisAdvice(
+                cluster_id=cluster.id,
+                advice_code=AdviceCode.VERWIJDEREN.value,
+                reason=f"Tekst komt bijna letterlijk voor in voorwaarden ({int(score*100)}% match). Kan verwijderd worden.",
+                confidence=ConfidenceLevel.HOOG.value,
+                reference_article=reference,
+                category="CONDITIONS_NEAR_EXACT",
+                cluster_name=cluster.name,
+                frequency=cluster.frequency
+            )
+
+        if score >= high_threshold:
+            return AnalysisAdvice(
+                cluster_id=cluster.id,
+                advice_code=AdviceCode.VERWIJDEREN.value,
+                reason=f"Tekst lijkt sterk op {reference} ({int(score*100)}% match). Controleer en verwijder indien identiek.",
+                confidence=ConfidenceLevel.MIDDEN.value,
+                reference_article=reference,
+                category="CONDITIONS_HIGH_SIMILARITY",
+                cluster_name=cluster.name,
+                frequency=cluster.frequency
+            )
+
+        if score >= medium_threshold:
+            return AnalysisAdvice(
+                cluster_id=cluster.id,
+                advice_code=AdviceCode.HANDMATIG_CHECKEN.value,
+                reason=f"Vertoont gelijkenis met {reference} ({int(score*100)}% match). Controleer of dit een variant is.",
+                confidence=ConfidenceLevel.LAAG.value,
+                reference_article=reference,
+                category="CONDITIONS_MEDIUM_SIMILARITY",
+                cluster_name=cluster.name,
+                frequency=cluster.frequency
+            )
+
+        if score >= 0.50:
+            # Lower threshold for hybrid similarity (paraphrases)
+            return AnalysisAdvice(
+                cluster_id=cluster.id,
+                advice_code=AdviceCode.HANDMATIG_CHECKEN.value,
+                reason=f"Mogelijke overlap met {reference} ({int(score*100)}% semantische match). Controleer of betekenis identiek is.",
+                confidence=ConfidenceLevel.LAAG.value,
+                reference_article=reference,
+                category="CONDITIONS_SEMANTIC_MATCH",
+                cluster_name=cluster.name,
+                frequency=cluster.frequency
+            )
+
+        return None
+
+    def _strategy3_fragment_match(
+        self,
+        cluster: Cluster,
+        text: str,
+        context: AnalysisContext
+    ) -> Optional[AnalysisAdvice]:
+        """
+        Strategy 3: Check significant fragments against conditions.
+
+        Looks for important phrases (e.g., coverage terms, exclusions)
+        that appear in both the text and conditions.
+        """
+        # Get significant fragments from the text
+        fragments = self._extract_significant_fragments(text)
+
+        if not fragments:
+            return None
+
+        # Check each fragment against conditions
+        for fragment in fragments:
+            if len(fragment) < 15:
+                continue
+
+            if context.policy_full_text and fragment.lower() in context.policy_full_text.lower():
+                # Find which section contains this fragment
+                section = self._find_section_containing_text(fragment.lower(), context)
+                reference = self._reference_formatter.format_reference(section) if section else "Voorwaarden"
+
+                return AnalysisAdvice(
+                    cluster_id=cluster.id,
+                    advice_code=AdviceCode.VERWIJDEREN.value,
+                    reason=f"Belangrijke passage '{fragment[:50]}...' komt voor in {reference}.",
+                    confidence=ConfidenceLevel.MIDDEN.value,
+                    reference_article=reference,
+                    category="CONDITIONS_FRAGMENTS",
+                    cluster_name=cluster.name,
+                    frequency=cluster.frequency
+                )
+
+        return None
+
+    def _strategy4_semantic_match(
+        self,
+        cluster: Cluster,
+        text: str,
+        context: AnalysisContext
+    ) -> Optional[AnalysisAdvice]:
+        """
+        Strategy 4: Semantic similarity check using embeddings.
+
+        Uses embeddings to find policy sections with the same MEANING,
+        even when the text is written differently.
+        """
+        if not context.semantic_service:
+            return None
+
+        if not context.semantic_index_ready:
+            return None
+
+        # Find semantically similar sections
+        try:
+            matches = context.semantic_service.find_similar(
+                text,
+                top_k=3,
+                min_score=SEMANTIC_MATCH_THRESHOLD
+            )
+        except Exception as e:
+            logger.debug(f"Semantic search failed: {e}")
+            return None
+
+        if not matches:
+            return None
+
+        best_match = matches[0]
+        logger.debug(
+            f"Semantic match found for cluster {cluster.id}: "
+            f"{best_match.text_id} (score: {best_match.score:.2f})"
+        )
+
+        # Look up section for reference
+        section = context.section_lookup.get(best_match.text_id) if context.section_lookup else None
+        reference = self._reference_formatter.format_reference(section) if section else best_match.text_id
+
+        if best_match.score >= SEMANTIC_HIGH_THRESHOLD:
+            return AnalysisAdvice(
+                cluster_id=cluster.id,
+                advice_code=AdviceCode.VERWIJDEREN.value,
+                reason=f"Semantisch identiek aan {reference} ({int(best_match.score*100)}% betekenis-match). Tekst heeft dezelfde betekenis als de voorwaarden.",
+                confidence=ConfidenceLevel.MIDDEN.value,
+                reference_article=reference,
+                category="CONDITIONS_SEMANTIC_MATCH",
+                cluster_name=cluster.name,
+                frequency=cluster.frequency
+            )
+
+        # Lower semantic scores - suggest manual review
+        return AnalysisAdvice(
+            cluster_id=cluster.id,
+            advice_code=AdviceCode.HANDMATIG_CHECKEN.value,
+            reason=f"Mogelijke semantische overlap met {reference} ({int(best_match.score*100)}% betekenis-match). Controleer of de betekenis identiek is.",
+            confidence=ConfidenceLevel.LAAG.value,
+            reference_article=reference,
+            category="CONDITIONS_SEMANTIC_POSSIBLE",
+            cluster_name=cluster.name,
+            frequency=cluster.frequency
+        )
+
+    def _find_section_containing_text(
         self,
         text: str,
         context: AnalysisContext
-    ) -> Tuple[Optional[PolicyDocumentSection], float]:
-        """
-        Find the best matching policy section using available similarity services.
+    ) -> Optional[PolicyDocumentSection]:
+        """Find the section that contains the given text."""
+        text_lower = text.lower()
 
-        Args:
-            text: Text to match
-            context: Analysis context with similarity services
+        for section in context.policy_sections:
+            if section.simplified_text and text_lower in section.simplified_text.lower():
+                return section
+
+        return None
+
+    def _find_best_section_match(
+        self,
+        text: str,
+        context: AnalysisContext
+    ) -> Optional[Tuple[float, PolicyDocumentSection]]:
+        """
+        Find the best matching policy section using similarity services.
 
         Returns:
-            Tuple of (best_section, score) or (None, 0.0)
+            Tuple of (score, section) or None if no match found
         """
         best_section: Optional[PolicyDocumentSection] = None
         best_score: float = 0.0
@@ -153,53 +380,55 @@ class ConditionsMatchStrategy(IAnalysisStrategy):
         similarity_service = context.hybrid_service or context.similarity_service
 
         if similarity_service is None:
-            return None, 0.0
+            return None
 
         # Compare against each section
         for section in context.policy_sections:
             if not section.simplified_text:
                 continue
 
-            score = similarity_service.similarity(text, section.simplified_text)
+            try:
+                score = similarity_service.similarity(text, section.simplified_text)
+            except Exception:
+                continue
 
             if score > best_score:
                 best_score = score
                 best_section = section
 
-        return best_section, best_score
+        if best_section is None or best_score < 0.50:
+            return None
 
-    def _extract_category(self, section: PolicyDocumentSection) -> str:
+        return best_score, best_section
+
+    def _extract_significant_fragments(self, text: str) -> List[str]:
         """
-        Extract category from the matched section.
+        Extract significant phrases from text that might appear in conditions.
 
-        Looks for category hints in section title, source file, or metadata.
-
-        Args:
-            section: Matched policy section
-
-        Returns:
-            Category string or "VOORWAARDEN"
+        Looks for:
+        - Sentences with coverage keywords
+        - Exclusion phrases
+        - Amount/limit specifications
         """
-        if section.source_file:
-            # Try to extract category from filename
-            source = section.source_file.lower()
-            if "brand" in source:
-                return "BRAND"
-            if "aansprak" in source:
-                return "AANSPRAKELIJKHEID"
-            if "diefstal" in source:
-                return "DIEFSTAL"
-            if "molest" in source:
-                return "MOLEST"
-            if "fraude" in source:
-                return "FRAUDE"
+        fragments: List[str] = []
 
-        if section.article_title:
-            # Try to extract from title
-            title = section.article_title.lower()
-            if "uitsluit" in title or "geen dekking" in title:
-                return "UITSLUITINGEN"
-            if "dekking" in title:
-                return "DEKKING"
+        # Split into sentences
+        import re
+        sentences = re.split(r'[.!?]+', text)
 
-        return "VOORWAARDEN"
+        coverage_keywords = [
+            'dekking', 'verzeker', 'uitsluit', 'niet gedekt',
+            'geen dekking', 'eigen risico', 'maximum', 'limiet'
+        ]
+
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if len(sentence) < 15:
+                continue
+
+            # Check for coverage keywords
+            sentence_lower = sentence.lower()
+            if any(kw in sentence_lower for kw in coverage_keywords):
+                fragments.append(sentence)
+
+        return fragments[:5]  # Limit to 5 most relevant

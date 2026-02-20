@@ -5,6 +5,8 @@ Step 0.5: Custom Instructions Strategy.
 Matches cluster text against user-defined custom instructions.
 This step runs before standard analysis to allow users to override
 the default analysis behavior for specific text patterns.
+
+SYNCED with AnalysisService._step05_custom_instructions_check (v4.5)
 """
 
 from typing import Optional
@@ -71,7 +73,10 @@ class CustomInstructionsStrategy(IAnalysisStrategy):
         if not service:
             return None
 
-        text = cluster.leader_text
+        # Use original_text for better matching accuracy
+        text = cluster.original_text
+        if not text or len(text) < 10:
+            return None
 
         # Find matching instruction
         match_result = service.find_match(text)
@@ -89,18 +94,15 @@ class CustomInstructionsStrategy(IAnalysisStrategy):
 
         # Build reason with match details
         search_text = instruction.search_text
-        if score >= 1.0:
-            reason = f"Komt overeen met instructie: '{search_text}' (100% match)"
-        else:
-            reason = f"Komt overeen met instructie: '{search_text}' ({score:.0%} match)"
+        reason = f"Komt overeen met instructie: '{search_text}' ({int(score*100)}% match)"
 
         advice = AnalysisAdvice(
             cluster_id=cluster.id,
             advice_code=advice_code,
             reason=reason,
-            confidence=ConfidenceLevel.HOOG.value if score >= 0.9 else ConfidenceLevel.MIDDEN.value,
-            reference_article="-",
-            category="CUSTOM",
+            confidence=ConfidenceLevel.HOOG.value if score >= 0.85 else ConfidenceLevel.MIDDEN.value,
+            reference_article="Custom instructie",
+            category="CUSTOM_INSTRUCTION",
             cluster_name=cluster.name,
             frequency=cluster.frequency,
         )

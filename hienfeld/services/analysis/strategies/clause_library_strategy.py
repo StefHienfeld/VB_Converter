@@ -7,14 +7,16 @@ High similarity matches result in REPLACE recommendations,
 medium matches result in CHECK recommendations.
 
 Thresholds:
-- >= 95%: VERWIJDEREN (exact match to standard clause)
-- >= 85%: HANDMATIG CHECKEN (similar to standard clause)
+- >= 95%: REPLACE with standard clause code
+- >= 85%: CHECK for possible replacement
+
+SYNCED with AnalysisService._step1_clause_library_check (v4.5)
 """
 
 from typing import Optional
 
 from hienfeld.domain.cluster import Cluster
-from hienfeld.domain.analysis import AnalysisAdvice, AdviceCode, ConfidenceLevel
+from hienfeld.domain.analysis import AnalysisAdvice, ConfidenceLevel
 from hienfeld.services.interfaces import IAnalysisStrategy, AnalysisContext
 from hienfeld.logging_config import get_logger
 
@@ -27,6 +29,9 @@ class ClauseLibraryStrategy(IAnalysisStrategy):
 
     Compares cluster text against a library of standard clauses
     to identify texts that should be replaced or checked.
+
+    Uses the ClauseLibraryService which returns ClauseMatch objects
+    with is_replacement_candidate and is_review_candidate flags.
     """
 
     @property
@@ -71,49 +76,39 @@ class ClauseLibraryStrategy(IAnalysisStrategy):
             return None
 
         text = cluster.leader_text
-        config = context.config
 
-        # Get thresholds from config
-        exact_threshold = config.conditions_match.exact_match_threshold  # 0.95
-        check_threshold = config.conditions_match.high_similarity_threshold  # 0.85
+        # Find best match in clause library
+        match = service.find_match(text)
 
-        # Find best match in library
-        match_result = service.find_best_match(text)
-
-        if match_result is None:
+        if match is None:
             return None
 
-        matched_clause, score = match_result
+        # High confidence match (>95%) -> REPLACE
+        if match.is_replacement_candidate:
+            return AnalysisAdvice(
+                cluster_id=cluster.id,
+                advice_code="🔄 VERVANGEN",
+                reason=f"Komt overeen met standaardclausule {match.clause.code} ({int(match.similarity_score*100)}% match). Vervang door deze standaardcode.",
+                confidence=ConfidenceLevel.HOOG.value,
+                reference_article=match.clause.code,
+                category="LIBRARY_EXACT_MATCH",
+                cluster_name=cluster.name,
+                frequency=cluster.frequency
+            )
 
-        if score < check_threshold:
-            # Below threshold, no match
-            return None
+        # Medium confidence match (85-95%) -> REVIEW
+        if match.is_review_candidate:
+            return AnalysisAdvice(
+                cluster_id=cluster.id,
+                advice_code="🔍 CONTROLEER GELIJKENIS",
+                reason=f"Lijkt sterk op standaardclausule {match.clause.code} ({int(match.similarity_score*100)}% match). Controleer of vervanging mogelijk is.",
+                confidence=ConfidenceLevel.MIDDEN.value,
+                reference_article=match.clause.code,
+                category="LIBRARY_HIGH_SIMILARITY",
+                cluster_name=cluster.name,
+                frequency=cluster.frequency
+            )
 
-        # Determine advice based on score
-        if score >= exact_threshold:
-            # Exact match - replace with standard
-            advice_code = AdviceCode.VERWIJDEREN.value
-            confidence = ConfidenceLevel.HOOG.value
-            reason = f"Exact match met standaardclausule ({score:.0%}): {matched_clause.code}"
-        else:
-            # Medium match - manual check needed
-            advice_code = AdviceCode.HANDMATIG_CHECKEN.value
-            confidence = ConfidenceLevel.MIDDEN.value
-            reason = f"Vergelijkbaar met standaardclausule ({score:.0%}): {matched_clause.code}"
-
-        # Get category from matched clause
-        category = getattr(matched_clause, "category", None) or "LIBRARY"
-
-        advice = AnalysisAdvice(
-            cluster_id=cluster.id,
-            advice_code=advice_code,
-            reason=reason,
-            confidence=confidence,
-            reference_article=matched_clause.code if matched_clause else "-",
-            category=category,
-            cluster_name=cluster.name,
-            frequency=cluster.frequency,
-        )
-
-        logger.debug(f"Clause library match: {cluster.id} -> {matched_clause.code} ({score:.0%})")
-        return advice
+        # Lower match - don't return advice, continue to step 2
+        logger.debug(f"Clause library low match: {cluster.id} (score: {match.similarity_score:.0%})")
+        return None
