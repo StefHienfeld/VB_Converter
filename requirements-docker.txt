@@ -28,6 +28,13 @@ PyMuPDF>=1.23.0
 pdfplumber>=0.10.0
 
 # -------------------------
+# OCR fallback (scanned PDFs)
+# Note: Tesseract binary must be installed on the system
+# -------------------------
+pytesseract>=0.3.10
+Pillow>=10.0.0
+
+# -------------------------
 # Fast string matching
 # -------------------------
 rapidfuzz>=3.0.0

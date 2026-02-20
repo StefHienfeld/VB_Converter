@@ -9,11 +9,13 @@ FROM python:3.11-slim-bookworm AS base
 RUN groupadd --gid 1000 appgroup && \
     useradd --uid 1000 --gid appgroup --shell /bin/bash --create-home appuser
 
-# System dependencies for NLP libraries
+# System dependencies for NLP libraries and OCR
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl \
         build-essential \
+        tesseract-ocr \
+        tesseract-ocr-nld \
         && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
