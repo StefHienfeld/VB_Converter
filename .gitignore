@@ -117,7 +117,9 @@ desktop.ini
 *.pth
 *.bin
 *.h5
-models/
+/models/
+# Keep Python package models (not ML models)
+!hienfeld_api/models/
 
 # ======================
 # Temporary files
