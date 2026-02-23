@@ -275,17 +275,20 @@ def _run_analysis_job(
 
     try:
         orchestrator.run(job, input_data)
+        # CRITICAL: Save updated job to database after orchestrator completes
+        job_repository.save(job)
         duration = time.monotonic() - start_time
-        refreshed = job_repository.get(job_id)
-        if refreshed and refreshed.status == JobStatus.COMPLETED:
+        if job.status == JobStatus.COMPLETED:
             audit_service.log_analysis_completed(job_id, "system", int(duration), analysis_mode)
             # Record metrics: analysis completed
-            row_count = refreshed.stats.get("total_rows", 0) if refreshed.stats else 0
+            row_count = job.stats.get("total_rows", 0) if job.stats else 0
             record_analysis_complete(duration, analysis_mode, row_count)
         else:
             audit_service.log_analysis_failed(job_id, "system", int(duration), analysis_mode)
             record_analysis_error("processing")
     except Exception as exc:
+        # Save job state (likely FAILED from orchestrator error handling)
+        job_repository.save(job)
         duration = time.monotonic() - start_time
         audit_service.log_analysis_failed(job_id, "system", int(duration), analysis_mode)
         # Record metrics: analysis error
@@ -468,6 +471,7 @@ async def get_status(
         status_message=job.status_message,
         error=job.error,
         stats=stats,
+        log_messages=list(job.log_messages),
     )
 
 

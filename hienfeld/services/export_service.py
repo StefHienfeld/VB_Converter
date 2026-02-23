@@ -6,6 +6,10 @@ from typing import Dict, List, Optional, TYPE_CHECKING
 from io import BytesIO
 import pandas as pd
 
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
+
 from ..config import AppConfig
 from ..domain.clause import Clause
 from ..domain.cluster import Cluster
@@ -33,6 +37,36 @@ class ExportService:
     Handles export of analysis results to Excel and other formats.
     """
 
+    # Cell-level colors for the Advies column only (not full rows)
+    ADVICE_COLORS = {
+        'VERWIJDEREN': 'FFCDD2',        # Red
+        'VERLOPEN': 'FFCDD2',           # Red
+        'BEHOUDEN': 'C8E6C9',           # Green
+        'HANDMATIG CHECKEN': 'FFE0B2',  # Orange
+        'STANDAARDISEREN': 'BBDEFB',    # Blue
+        'OPSCHONEN': 'FFF9C4',          # Yellow
+        'AANVULLEN': 'FFF9C4',          # Yellow
+    }
+
+    # Confidence cell colors
+    CONFIDENCE_COLORS = {
+        'Hoog': 'C8E6C9',   # Green
+        'Midden': 'FFF9C4',  # Yellow
+        'Laag': 'FFCDD2',    # Red
+    }
+
+    # Header styling
+    HEADER_FILL = PatternFill(start_color='2C3E50', end_color='2C3E50', fill_type='solid')
+    HEADER_FONT = Font(name='Calibri', bold=True, color='FFFFFF', size=11)
+    HEADER_ALIGNMENT = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    HEADER_BORDER = Border(
+        bottom=Side(style='medium', color='2C3E50'),
+    )
+
+    # Data cell defaults
+    DATA_FONT = Font(name='Calibri', size=10, color='333333')
+    DATA_ALIGNMENT = Alignment(vertical='top', wrap_text=False)
+
     def __init__(self, config: AppConfig):
         """
         Initialize the export service.
@@ -41,6 +75,137 @@ class ExportService:
             config: Application configuration
         """
         self.config = config
+
+    # ------------------------------------------------------------------ #
+    #  Excel formatting helpers                                           #
+    # ------------------------------------------------------------------ #
+
+    def _apply_excel_formatting(self, ws, sheet_type: str = 'results') -> None:
+        """
+        Apply professional formatting to an openpyxl worksheet.
+
+        Args:
+            ws: openpyxl Worksheet object
+            sheet_type: 'results' | 'summary' | 'instructions' | 'detail'
+        """
+        if ws.max_row is None or ws.max_row < 1:
+            return
+
+        # --- 1. Freeze header row + AutoFilter ---
+        ws.freeze_panes = 'A2'
+        ws.auto_filter.ref = ws.dimensions
+
+        # --- 2. Header row styling ---
+        for cell in ws[1]:
+            cell.font = self.HEADER_FONT
+            cell.fill = self.HEADER_FILL
+            cell.alignment = self.HEADER_ALIGNMENT
+            cell.border = self.HEADER_BORDER
+
+        # Build column-name-to-index map (1-based)
+        col_map = {}
+        for cell in ws[1]:
+            if cell.value:
+                col_map[str(cell.value)] = cell.column
+
+        # --- 3. Column widths ---
+        fixed_widths = {'Tekst': 60, 'Reden': 40, 'Artikel': 25}
+        for col_cells in ws.columns:
+            col_letter = get_column_letter(col_cells[0].column)
+            col_idx = col_cells[0].column
+            header_name = str(ws.cell(row=1, column=col_idx).value or '')
+
+            if header_name in fixed_widths:
+                ws.column_dimensions[col_letter].width = fixed_widths[header_name]
+                continue
+
+            # Auto-fit based on content (sample first 100 rows)
+            max_length = 0
+            for cell in col_cells[:101]:
+                try:
+                    cell_len = len(str(cell.value or ''))
+                    if cell_len > max_length:
+                        max_length = cell_len
+                except Exception:
+                    pass
+            ws.column_dimensions[col_letter].width = min(max(max_length + 3, 10), 40)
+
+        # --- 4. Data cell styling ---
+        # Apply default font + alignment to all data cells
+        for row_num in range(2, ws.max_row + 1):
+            for col_num in range(1, ws.max_column + 1):
+                cell = ws.cell(row=row_num, column=col_num)
+                cell.font = self.DATA_FONT
+                cell.alignment = self.DATA_ALIGNMENT
+
+        # Only Reden gets wrap_text (it's the explanation column)
+        reden_idx = col_map.get('Reden')
+        if reden_idx:
+            wrap_alignment = Alignment(vertical='top', wrap_text=True)
+            for row_num in range(2, ws.max_row + 1):
+                ws.cell(row=row_num, column=reden_idx).alignment = wrap_alignment
+
+
+        # Only apply data-row styling for results/detail sheets
+        if sheet_type in ('results', 'detail'):
+            self._apply_data_row_styling(ws, col_map)
+
+        # --- 5. Status dropdown (data validation) ---
+        status_idx = col_map.get('Status')
+        if status_idx and ws.max_row > 1:
+            dv = DataValidation(
+                type='list',
+                formula1='"Te beoordelen,Akkoord,Aangepast,Overslaan"',
+                allow_blank=True,
+            )
+            dv.error = 'Kies een geldige status'
+            dv.errorTitle = 'Ongeldige status'
+            dv.prompt = 'Kies een status'
+            dv.promptTitle = 'Status'
+            status_letter = get_column_letter(status_idx)
+            dv.add(f'{status_letter}2:{status_letter}{ws.max_row}')
+            ws.add_data_validation(dv)
+
+
+    def _apply_data_row_styling(self, ws, col_map: dict) -> None:
+        """Apply cell-level color coding to Advies and Vertrouwen columns only."""
+        advies_idx = col_map.get('Advies')
+        vertrouwen_idx = col_map.get('Vertrouwen')
+
+        for row_num in range(2, ws.max_row + 1):
+            # --- Advies cell coloring (only the cell, not the row) ---
+            if advies_idx:
+                advies_val = str(ws.cell(row=row_num, column=advies_idx).value or '')
+
+                fill_hex = None
+                if advies_val.startswith('📋'):
+                    fill_hex = 'E1BEE7'  # Purple for custom instructions
+                else:
+                    for keyword, color in self.ADVICE_COLORS.items():
+                        if keyword in advies_val.upper():
+                            fill_hex = color
+                            break
+
+                if fill_hex:
+                    ws.cell(row=row_num, column=advies_idx).fill = PatternFill(
+                        start_color=fill_hex, end_color=fill_hex, fill_type='solid'
+                    )
+                    ws.cell(row=row_num, column=advies_idx).font = Font(
+                        name='Calibri', size=10, bold=True, color='333333'
+                    )
+
+            # --- Vertrouwen cell coloring (only the cell) ---
+            if vertrouwen_idx:
+                conf_val = str(ws.cell(row=row_num, column=vertrouwen_idx).value or '')
+                conf_hex = self.CONFIDENCE_COLORS.get(conf_val)
+                if conf_hex:
+                    ws.cell(row=row_num, column=vertrouwen_idx).fill = PatternFill(
+                        start_color=conf_hex, end_color=conf_hex, fill_type='solid'
+                    )
+                    ws.cell(row=row_num, column=vertrouwen_idx).font = Font(
+                        name='Calibri', size=10, bold=True, color='333333'
+                    )
+
 
     def _determine_action_status(self, ref_match: Optional[ReferenceMatch]) -> str:
         """
@@ -134,16 +299,19 @@ class ExportService:
                 ref_match = reference_matches.get(simplified)
 
             # Build row with standard columns
+            # WORKFLOW-FIRST column order: Status, Tekst, Advies, Reden, Artikel, Vertrouwen, Frequentie, Cluster_ID
             row = {
-                # Status kolom (leeg) voor collega's tracking
-                'Status': '',
-                'Cluster_ID': cluster_id,
-                'Cluster_Naam': cluster.name if cluster else '',
-                'Vertrouwen': advice.confidence if advice else '',
+                # Status kolom - initialiseren voor tracking workflow
+                'Status': 'Te beoordelen',
+                # Analysis output columns (workflow order)
                 'Advies': advice.advice_code if advice else '',
                 'Reden': advice.reason if advice else '',
                 'Artikel': advice.reference_article if advice else '',
+                'Vertrouwen': advice.confidence if advice else '',
+                # Frequency and cluster info
                 'Frequentie': cluster.frequency if cluster else 0,
+                'Cluster_ID': cluster_id,
+                'Cluster_Naam': cluster.name if cluster else '',
             }
 
             # Add reference columns (if reference analysis was used)
@@ -620,11 +788,13 @@ class ExportService:
 
             # Write normal results to main sheet
             normal_df.to_excel(writer, sheet_name='Analyseresultaten', index=False)
+            self._apply_excel_formatting(writer.sheets['Analyseresultaten'], sheet_type='results')
             logger.info(f"Analyseresultaten sheet: {len(normal_df)} rows")
 
             # Write long texts to separate sheet (if any)
             if not long_texts_df.empty:
                 long_texts_df.to_excel(writer, sheet_name='Lange teksten', index=False)
+                self._apply_excel_formatting(writer.sheets['Lange teksten'], sheet_type='results')
                 logger.info(f"Lange teksten sheet: {len(long_texts_df)} rows (>{max_text_length} characters)")
             else:
                 logger.info("No long texts to separate")
@@ -634,13 +804,30 @@ class ExportService:
                 summary_df = self.build_cluster_summary(clusters, advice_map)
                 summary_df = self._sanitize_for_excel(summary_df)  # Fix: sanitize summary too
                 summary_df.to_excel(writer, sheet_name='Cluster Samenvatting', index=False)
+                self._apply_excel_formatting(writer.sheets['Cluster Samenvatting'], sheet_type='summary')
 
             # Verdwenen Teksten sheet (texts in reference but not in current)
             if gone_texts:
                 gone_df = self._build_gone_texts_dataframe(gone_texts)
                 gone_df = self._sanitize_for_excel(gone_df)  # Fix: sanitize gone texts too
                 gone_df.to_excel(writer, sheet_name='Verdwenen Teksten', index=False)
+                self._apply_excel_formatting(writer.sheets['Verdwenen Teksten'], sheet_type='summary')
                 logger.info(f"Verdwenen Teksten sheet: {len(gone_texts)} rows")
+
+            # UNIEKE_Detail sheet - detailed view of all singleton texts
+            # Use normal_df (not df) to exclude long texts that are already in "Lange teksten"
+            unique_detail_df = self._build_unique_detail_dataframe(normal_df)
+            if not unique_detail_df.empty:
+                unique_detail_df = self._sanitize_for_excel(unique_detail_df)
+                unique_detail_df.to_excel(writer, sheet_name='Unieke_Detail', index=False)
+                self._apply_excel_formatting(writer.sheets['Unieke_Detail'], sheet_type='detail')
+                logger.info(f"Unieke_Detail sheet: {len(unique_detail_df)} rows")
+
+            # Instructies sheet - help for colleagues
+            instructions_df = self._build_instructions_dataframe()
+            instructions_df.to_excel(writer, sheet_name='Instructies', index=False)
+            self._apply_excel_formatting(writer.sheets['Instructies'], sheet_type='instructions')
+            logger.info("Added Instructies sheet")
 
         logger.info("Generated Excel file")
         return output.getvalue()
@@ -676,7 +863,92 @@ class ExportService:
             })
 
         return pd.DataFrame(rows)
-    
+
+    def _build_unique_detail_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Build DataFrame for "Unieke_Detail" sheet.
+
+        This sheet provides a detailed view of all singleton (frequency=1) texts
+        that were grouped into UNIEK meta-clusters. This allows colleagues to
+        see the individual texts within each UNIEK group.
+
+        Args:
+            df: Main results DataFrame (with UNIEK clusters already created)
+
+        Returns:
+            DataFrame with detailed unique texts, or empty DataFrame if no unique texts
+        """
+        if df.empty or 'Cluster_ID' not in df.columns:
+            return pd.DataFrame()
+
+        # Filter only UNIEK clusters
+        unique_mask = df['Cluster_ID'].str.startswith('UNIEK-', na=False)
+        unique_df = df[unique_mask].copy()
+
+        if unique_df.empty:
+            return pd.DataFrame()
+
+        # Select and reorder columns for clarity
+        detail_columns = [
+            'Cluster_ID',  # UNIEK group identifier
+            'Status',
+            'Tekst',
+            'Advies',
+            'Reden',
+            'Artikel',
+            'Vertrouwen',
+        ]
+
+        # Filter to existing columns
+        available_cols = [c for c in detail_columns if c in unique_df.columns]
+        result = unique_df[available_cols].copy()
+
+        # Sort by cluster group then by text for readability
+        result = result.sort_values(by=['Cluster_ID', 'Tekst'] if 'Tekst' in result.columns else ['Cluster_ID'])
+
+        logger.info(f"Built Unieke_Detail with {len(result)} rows from {unique_df['Cluster_ID'].nunique()} UNIEK groups")
+        return result
+
+    def _build_instructions_dataframe(self) -> pd.DataFrame:
+        """
+        Build DataFrame for "Instructies" sheet.
+
+        Provides guidance to colleagues on how to use the analysis results.
+
+        Returns:
+            DataFrame with instructions and column explanations
+        """
+        instructions = [
+            {'Onderwerp': 'Doel', 'Uitleg': 'Dit rapport bevat de analyse van polisclausules, gegroepeerd in clusters.'},
+            {'Onderwerp': 'Status kolom', 'Uitleg': 'Gebruik deze kolom om de voortgang bij te houden. Opties: Te beoordelen, In behandeling, Akkoord, Afgewezen'},
+            {'Onderwerp': '', 'Uitleg': ''},
+            {'Onderwerp': 'KOLOM UITLEG', 'Uitleg': ''},
+            {'Onderwerp': 'Status', 'Uitleg': 'Trackingstatus voor handmatige beoordeling'},
+            {'Onderwerp': 'Tekst', 'Uitleg': 'De originele clausuletekst uit de polis'},
+            {'Onderwerp': 'Advies', 'Uitleg': 'Aanbevolen actie (VERWIJDEREN, BEHOUDEN, HANDMATIG CHECKEN, etc.)'},
+            {'Onderwerp': 'Reden', 'Uitleg': 'Uitleg waarom dit advies wordt gegeven'},
+            {'Onderwerp': 'Artikel', 'Uitleg': 'Referentie naar het artikel in de voorwaarden (indien van toepassing)'},
+            {'Onderwerp': 'Vertrouwen', 'Uitleg': 'Betrouwbaarheid van het advies: Hoog, Midden, of Laag'},
+            {'Onderwerp': 'Frequentie', 'Uitleg': 'Hoe vaak deze tekst voorkomt in de dataset'},
+            {'Onderwerp': 'Cluster_ID', 'Uitleg': 'Technische identificatie van de clustergroep'},
+            {'Onderwerp': 'Cluster_Naam', 'Uitleg': 'Beschrijvende naam van de cluster'},
+            {'Onderwerp': '', 'Uitleg': ''},
+            {'Onderwerp': 'ADVIES CODES', 'Uitleg': ''},
+            {'Onderwerp': 'VERWIJDEREN', 'Uitleg': 'Tekst kan verwijderd worden - al gedekt door voorwaarden'},
+            {'Onderwerp': 'BEHOUDEN (CLAUSULE)', 'Uitleg': 'Tekst moet behouden worden - is een specifieke clausule'},
+            {'Onderwerp': 'BEHOUDEN (MAATWERK)', 'Uitleg': 'Tekst moet behouden worden - is maatwerk voor deze polis'},
+            {'Onderwerp': 'HANDMATIG CHECKEN', 'Uitleg': 'Automatische analyse onzeker - handmatige beoordeling nodig'},
+            {'Onderwerp': 'STANDAARDISEREN', 'Uitleg': 'Tekst komt vaak voor - maak er een standaard clausulecode van'},
+            {'Onderwerp': '', 'Uitleg': ''},
+            {'Onderwerp': 'SHEETS', 'Uitleg': ''},
+            {'Onderwerp': 'Analyseresultaten', 'Uitleg': 'Hoofdresultaten - alle normale clausules'},
+            {'Onderwerp': 'Lange teksten', 'Uitleg': 'Clausules die te lang zijn voor automatische analyse'},
+            {'Onderwerp': 'Unieke_Detail', 'Uitleg': 'Gedetailleerde weergave van unieke (1x voorkomende) teksten'},
+            {'Onderwerp': 'Cluster Samenvatting', 'Uitleg': 'Overzicht per cluster (optioneel)'},
+            {'Onderwerp': 'Verdwenen Teksten', 'Uitleg': 'Teksten die in referentie stonden maar nu ontbreken (indien referentie gebruikt)'},
+        ]
+        return pd.DataFrame(instructions)
+
     def to_csv_bytes(self, df: pd.DataFrame, delimiter: str = ';') -> bytes:
         """
         Export DataFrame to CSV bytes.
@@ -753,31 +1025,39 @@ class ExportService:
     ) -> pd.DataFrame:
         """
         Select and order columns for final output.
-        
+
+        Uses WORKFLOW-FIRST ordering: Status, Tekst, Advies, Reden, Artikel, Vertrouwen, Frequentie, then technical columns.
+
         Args:
             df: Full DataFrame
             text_col: Name of the original text column
-            
+
         Returns:
-            DataFrame with selected columns in order
+            DataFrame with selected columns in workflow order
         """
-        # Define desired column order
+        # Define desired column order (WORKFLOW-FIRST)
         priority_cols = [
-            'Cluster_ID', 'Cluster_Naam', 'Frequentie',
-            'Advies', 'Vertrouwen', 'Reden', 'Artikel'
+            'Status',           # 1. Tracking
+            'Tekst',            # 2. What is it?
+            'Advies',           # 3. What to do?
+            'Reden',            # 4. Why?
+            'Artikel',          # 5. Reference
+            'Vertrouwen',       # 6. How sure?
+            'Frequentie',       # 7. How often?
+            'Cluster_ID',       # 8. Technical ID
+            'Cluster_Naam',     # 9. Technical name
         ]
-        
-        # Add text column
-        if 'Tekst' in df.columns:
-            priority_cols.append('Tekst')
-        elif text_col in df.columns:
-            priority_cols.append(text_col)
-        
+
+        # Handle text column alias
+        if 'Tekst' not in df.columns and text_col in df.columns:
+            # Rename text_col to Tekst for consistency
+            df = df.rename(columns={text_col: 'Tekst'})
+
         # Filter to existing columns
         existing_cols = [c for c in priority_cols if c in df.columns]
-        
+
         # Add any remaining columns
         other_cols = [c for c in df.columns if c not in existing_cols]
-        
+
         return df[existing_cols + other_cols]
 

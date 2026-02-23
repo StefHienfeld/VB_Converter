@@ -115,6 +115,8 @@ const Index = () => {
                 currentMessage={analysis.currentMessage}
                 jobStatus={analysis.jobStatus}
                 startTime={analysis.startTime ?? undefined}
+                logMessages={analysis.logMessages}
+                estimatedTimeRemaining={analysis.estimatedTimeRemaining}
                 className="order-2 lg:order-1 animate-fade-up animation-delay-200"
               >
                 {analysis.analysisComplete && (

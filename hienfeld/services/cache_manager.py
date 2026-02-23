@@ -113,10 +113,10 @@ class CacheManager:
                 try:
                     clear_fn()
                     results[name] = "cleared"
-                    logger.info(f"✅ Cleared cache: {name}")
+                    logger.info(f"[OK] Cleared cache: {name}")
                 except Exception as e:
                     results[name] = f"error: {str(e)}"
-                    logger.error(f"❌ Failed to clear {name}: {e}")
+                    logger.error(f"[ERROR] Failed to clear {name}: {e}")
             
             self._last_clear_time = datetime.now()
         
@@ -150,10 +150,10 @@ class CacheManager:
                     try:
                         clear_fn()
                         results[name] = "cleared"
-                        logger.info(f"✅ Cleared {cache_type} cache: {name}")
+                        logger.info(f"[OK] Cleared {cache_type} cache: {name}")
                     except Exception as e:
                         results[name] = f"error: {str(e)}"
-                        logger.error(f"❌ Failed to clear {name}: {e}")
+                        logger.error(f"[ERROR] Failed to clear {name}: {e}")
         
         return results
     

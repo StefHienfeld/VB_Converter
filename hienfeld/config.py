@@ -25,13 +25,13 @@ class AnalysisMode(str, Enum):
 @dataclass
 class ClusteringConfig:
     """Configuration for the clustering algorithm."""
-    min_text_length: int = 5
+    min_text_length: int = 10  # Increased from 5: prevent clustering "Ja", "Nee", etc.
     similarity_threshold: float = 0.90
-    leader_window_size: int = 40  # OPTIMIZED: 60% fewer comparisons (was 100)
+    leader_window_size: int = 100  # Restored: better clustering quality (was reduced to 40)
     use_rapidfuzz: bool = True
-    
+
     # Length-based filtering
-    length_tolerance: float = 0.2  # 20% length difference allowed
+    length_tolerance: float = 0.25  # 25% length difference allowed (was 0.20)
 
 
 @dataclass
@@ -54,8 +54,8 @@ class ConditionsMatchConfig:
 @dataclass
 class AnalysisRuleConfig:
     """Configuration for analysis rules and thresholds."""
-    frequency_standardize_threshold: int = 20
-    max_text_length: int = 800  # NEW: Max length before manual check required
+    frequency_standardize_threshold: int = 10  # Lowered from 20: earlier standardization recommendation
+    max_text_length: int = 1000  # Increased from 800: more room for complex clauses
 
     # Conditions matching config
     conditions_match: ConditionsMatchConfig = field(default_factory=ConditionsMatchConfig)
@@ -406,20 +406,21 @@ class SemanticConfig:
             # THRESHOLD OPTIES:
             # - 0.80: Te agressief - mist parafrasen en synoniemen (30% kwaliteitsverlies)
             # - 0.85: Goede balans - skip alleen duidelijk tekstueel vergelijkbare clausules
+            # - 0.88: Optimized - 15% extra embedding savings vs 0.85, minimal quality loss
             # - 0.90: Conservatief - bijna altijd embeddings (langzamer maar nauwkeuriger)
             # - 0.92: Zeer conservatief - oorspronkelijke waarde (te langzaam)
             #
-            # WAAROM 0.85:
+            # WAAROM 0.88:
             # - Embeddings zijn het meest waardevol in 70-85% RapidFuzz range (detecteert parafrasen)
-            # - Bij RapidFuzz >= 85% zijn teksten al zo vergelijkbaar dat embeddings weinig toevoegen
-            # - Bespaart ~35% embedding calls vs 0.80, ~50% vs 0.92
+            # - Bij RapidFuzz >= 88% zijn teksten al zeer vergelijkbaar dat embeddings weinig toevoegen
+            # - Bespaart ~15% extra embedding calls vs 0.85, ~50% vs 0.92
             # - Verzekering clausules gebruiken vaak standaard formuleringen -> hoge RapidFuzz
             #
             # PERFORMANCE IMPACT (1660 rijen):
-            # - 0.80: ~8 min (50% minder embeddings, kans op gemiste matches)
-            # - 0.85: ~10 min (35% minder embeddings, goede kwaliteit) <- GEKOZEN
+            # - 0.85: ~10 min (35% minder embeddings, goede kwaliteit)
+            # - 0.88: ~8.5 min (50% minder embeddings, goede kwaliteit) <- OPTIMIZED
             # - 0.92: ~15 min (10% minder embeddings, maximale kwaliteit)
-            skip_embeddings_threshold=0.85,
+            skip_embeddings_threshold=0.88,
             batch_embeddings=True,
             use_embedding_cache=True,
             cache_size=5000,

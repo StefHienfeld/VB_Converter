@@ -1,6 +1,7 @@
-import { Check, Loader2, Clock, AlertCircle, Server } from "lucide-react";
+import { Check, Loader2, Clock, AlertCircle, Server, Timer } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
+import { LogMessage } from "@/lib/api";
 
 interface ProgressStep {
   id: string;
@@ -16,6 +17,8 @@ interface AnalysisProgressProps {
   currentMessage?: string;
   jobStatus?: string;
   startTime?: number; // Timestamp when analysis started
+  logMessages?: LogMessage[];
+  estimatedTimeRemaining?: string | null;
 }
 
 // Format elapsed time as "Xm Ys"
@@ -47,10 +50,10 @@ function getStatusIndicator(status: string, progress: number) {
       bgClass: "bg-primary/10",
     };
   }
-  if (status === "pending") {
+  if (status === "pending" || status === "initializing") {
     return {
       icon: Server,
-      label: "Wachten op server",
+      label: "Opstarten...",
       colorClass: "text-amber-500",
       bgClass: "bg-amber-500/10",
     };
@@ -71,28 +74,36 @@ export const AnalysisProgress = ({
   currentMessage,
   jobStatus = "pending",
   startTime,
+  logMessages = [],
+  estimatedTimeRemaining,
 }: AnalysisProgressProps) => {
   const [elapsedTime, setElapsedTime] = useState(0);
-  
+  const logEndRef = useRef<HTMLDivElement>(null);
+
   // Update elapsed time every second
   useEffect(() => {
     if (!startTime || jobStatus === "completed" || jobStatus === "failed") {
       return;
     }
-    
+
     const interval = setInterval(() => {
       setElapsedTime(Date.now() - startTime);
     }, 1000);
-    
+
     return () => clearInterval(interval);
   }, [startTime, jobStatus]);
-  
+
+  // Auto-scroll activity log to bottom
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [logMessages]);
+
   const statusIndicator = getStatusIndicator(jobStatus, currentProgress);
   const StatusIcon = statusIndicator.icon;
-  
+
   // Determine if we should pulse the progress bar (waiting states)
-  const shouldPulse = jobStatus === "pending" || (jobStatus === "running" && currentProgress === 0);
-  
+  const shouldPulse = jobStatus === "pending" || jobStatus === "initializing" || (jobStatus === "running" && currentProgress === 0);
+
   return (
     <div className={cn("floating-card p-6", className)}>
       {/* Header with status badge and timer */}
@@ -112,8 +123,15 @@ export const AnalysisProgress = ({
             {statusIndicator.label}
           </div>
         </div>
-        
+
         <div className="flex items-center gap-3">
+          {/* ETA */}
+          {estimatedTimeRemaining && jobStatus === "running" && currentProgress < 100 && (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Timer className="w-3.5 h-3.5" />
+              {estimatedTimeRemaining} resterend
+            </div>
+          )}
           {/* Elapsed time */}
           {startTime && (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -145,8 +163,8 @@ export const AnalysisProgress = ({
           <div
             className={cn(
               "h-full transition-all duration-700 ease-out relative",
-              currentProgress >= 100 
-                ? "bg-primary" 
+              currentProgress >= 100
+                ? "bg-primary"
                 : "bg-gradient-to-r from-secondary via-primary to-secondary bg-[length:200%_100%]",
               currentProgress > 0 && currentProgress < 100 && "animate-gradient"
             )}
@@ -158,7 +176,7 @@ export const AnalysisProgress = ({
             )}
           </div>
         </div>
-        
+
         {/* Status message */}
         <div className="flex items-center justify-between mt-2">
           <p className={cn(
@@ -169,7 +187,7 @@ export const AnalysisProgress = ({
           </p>
         </div>
       </div>
-      
+
       {/* Steps timeline */}
       <div className="space-y-3 mt-6 pt-4 border-t border-border/50">
         {steps.map((step, index) => (
@@ -187,7 +205,7 @@ export const AnalysisProgress = ({
                 )}
               />
             )}
-            
+
             {/* Step Dot */}
             <div
               className={cn(
@@ -220,6 +238,30 @@ export const AnalysisProgress = ({
           </div>
         ))}
       </div>
+
+      {/* Activity Log */}
+      {logMessages.length > 0 && (
+        <div className="mt-4 pt-4 border-t border-border/50">
+          <h4 className="text-xs font-medium text-muted-foreground mb-2">Activiteit</h4>
+          <div className="max-h-[140px] overflow-y-auto rounded-md bg-muted/30 p-2 space-y-0.5">
+            {logMessages.slice(-10).map((log, i, arr) => (
+              <div
+                key={`${log.time}-${i}`}
+                className={cn(
+                  "flex gap-2 text-xs font-mono leading-5",
+                  i === arr.length - 1
+                    ? "text-foreground font-medium"
+                    : "text-muted-foreground"
+                )}
+              >
+                <span className="text-muted-foreground/60 shrink-0">{log.time}</span>
+                <span className="break-words">{log.message}</span>
+              </div>
+            ))}
+            <div ref={logEndRef} />
+          </div>
+        </div>
+      )}
 
       {children && <div className="mt-6 pt-4 border-t border-border/50">{children}</div>}
     </div>

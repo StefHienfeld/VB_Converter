@@ -29,7 +29,7 @@ class Timer:
     def __enter__(self):
         self.start_time = time.time()
         log_func = getattr(logger, self.log_level.lower(), logger.info)
-        log_func(f"⏱️  START: {self.name}")
+        log_func(f"[START] {self.name}")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -37,10 +37,10 @@ class Timer:
         elapsed = self.end_time - self.start_time
 
         if exc_type is not None:
-            logger.error(f"❌ FAILED: {self.name} (after {elapsed:.2f}s) - {exc_type.__name__}: {exc_val}")
+            logger.error(f"[FAILED] {self.name} (after {elapsed:.2f}s) - {exc_type.__name__}: {exc_val}")
         else:
             log_func = getattr(logger, self.log_level.lower(), logger.info)
-            log_func(f"✅ DONE: {self.name} ({elapsed:.2f}s)")
+            log_func(f"[DONE] {self.name} ({elapsed:.2f}s)")
 
         return False  # Don't suppress exceptions
 
@@ -97,7 +97,7 @@ class PhaseTimer:
         self.start_time = time.time()
         self.last_checkpoint = self.start_time
         self.checkpoints = []
-        logger.info(f"🚀 BEGIN: {operation_name}")
+        logger.info(f"[BEGIN] {operation_name}")
 
     def checkpoint(self, phase_name: str) -> float:
         """
@@ -121,7 +121,7 @@ class PhaseTimer:
         })
 
         logger.info(
-            f"📍 CHECKPOINT: {self.operation_name} → {phase_name} "
+            f"[CHECKPOINT] {self.operation_name} -> {phase_name} "
             f"(+{elapsed_since_last:.2f}s, total: {elapsed_total:.2f}s)"
         )
 
@@ -137,10 +137,10 @@ class PhaseTimer:
         """
         total_time = time.time() - self.start_time
 
-        logger.info(f"🏁 FINISH: {self.operation_name} (total: {total_time:.2f}s)")
+        logger.info(f"[FINISH] {self.operation_name} (total: {total_time:.2f}s)")
 
         if self.checkpoints:
-            logger.info(f"📊 Phase breakdown:")
+            logger.info(f"[STATS] Phase breakdown:")
             for cp in self.checkpoints:
                 percentage = (cp['elapsed_since_last'] / total_time) * 100
                 logger.info(

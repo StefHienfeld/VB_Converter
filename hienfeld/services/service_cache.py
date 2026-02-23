@@ -58,7 +58,7 @@ class ServiceCache:
     def __init__(self):
         self._cache: Dict[str, CacheEntry] = {}
         self._cache_lock = threading.Lock()
-        logger.info("🔧 Service cache initialized")
+        logger.info("Service cache initialized")
 
     @classmethod
     def get_instance(cls) -> 'ServiceCache':

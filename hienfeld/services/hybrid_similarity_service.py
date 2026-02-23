@@ -86,7 +86,7 @@ class PerformanceStats:
                 avg_faiss_time = self.faiss_search_time_ms / self.faiss_searches
                 faiss_info = f", FAISS: {self.faiss_searches} searches ({avg_faiss_time:.1f}ms avg)"
             logger.info(
-                f"🚀 Performance: {self.total_find_best_calls} calls, "
+                f"[PERF] Performance: {self.total_find_best_calls} calls, "
                 f"{self.total_candidates_screened} candidates screened, "
                 f"{self.total_full_hybrid_calls} full hybrid ({savings:.1f}% saved){faiss_info}"
             )
@@ -227,7 +227,7 @@ class HybridSimilarityService:
         
         if len(available) == 1 and "RapidFuzz" in available:
             logger.warning(
-                "⚠️ Only RapidFuzz available - semantic enhancements disabled. "
+                "[WARN] Only RapidFuzz available - semantic enhancements disabled. "
                 "Install dependencies for better matching: pip install spacy scikit-learn"
             )
         
@@ -327,7 +327,7 @@ class HybridSimilarityService:
             self._perf_stats.faiss_index_builds += 1
 
             logger.info(
-                f"✅ FAISS index built: {len(texts)} vectors, "
+                f"[OK] FAISS index built: {len(texts)} vectors, "
                 f"dim={embedding_dim}, time={elapsed:.2f}s"
             )
             return True

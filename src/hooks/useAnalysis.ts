@@ -10,7 +10,7 @@ import { usePolling } from "@/hooks/usePolling";
 import { useProgress } from "@/hooks/useProgress";
 import { AnalysisSettings, DEFAULT_SETTINGS } from "@/types/settings";
 import { AnalysisResultRow } from "@/types/analysis";
-import { startAnalysis, downloadReport, JobStatusResponse, AnalysisResultsResponse } from "@/lib/api";
+import { startAnalysis, downloadReport, JobStatusResponse, AnalysisResultsResponse, LogMessage } from "@/lib/api";
 
 export type InputView = "full" | "compact";
 
@@ -45,6 +45,8 @@ export interface UseAnalysisReturn {
   currentMessage: string;
   jobStatus: string;
   startTime: number | null;
+  logMessages: LogMessage[];
+  estimatedTimeRemaining: string | null;
 
   // UI state
   inputView: InputView;
@@ -101,6 +103,18 @@ export function useAnalysis(): UseAnalysisReturn {
         variant: "destructive",
       });
       return;
+    }
+
+    // Warn if no conditions files uploaded
+    if (fileUpload.conditionsFiles.length === 0) {
+      const proceed = window.confirm(
+        "Let op: Geen voorwaarden geupload.\n\n" +
+        "De analyse zal minder nauwkeurig zijn omdat er geen polisvoorwaarden beschikbaar zijn om mee te vergelijken.\n\n" +
+        "Wilt u doorgaan zonder voorwaarden?"
+      );
+      if (!proceed) {
+        return;
+      }
     }
 
     try {
@@ -211,6 +225,8 @@ export function useAnalysis(): UseAnalysisReturn {
     currentMessage: progress.currentMessage,
     jobStatus: progress.jobStatus,
     startTime,
+    logMessages: progress.logMessages,
+    estimatedTimeRemaining: progress.estimatedTimeRemaining,
 
     // UI state
     inputView,

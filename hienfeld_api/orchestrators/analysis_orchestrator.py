@@ -249,7 +249,7 @@ class AnalysisOrchestrator:
         phase_timer: PhaseTimer
     ) -> Tuple[Any, str, Optional[str]]:
         """Phase 2: Load and parse the policy file."""
-        job.update(progress=5, message="Bestand inlezen...")
+        job.update(progress=5, message=f"Bestand inlezen: {input_data.policy_filename}...")
         logger.info(f"Loading policy file: {input_data.policy_filename} ({len(input_data.policy_bytes)} bytes)")
 
         with Timer("Load policy file"):
@@ -261,6 +261,7 @@ class AnalysisOrchestrator:
             policy_number_col = container.ingestion.detect_policy_number_column(df)
 
         logger.info(f"Policy loaded: {len(df)} rows, text column: '{text_col}'")
+        job.add_log(f"{len(df)} rijen geladen uit {input_data.policy_filename}")
         phase_timer.checkpoint(f"Policy file loaded ({len(df)} rows)")
 
         return df, text_col, policy_number_col
@@ -281,8 +282,8 @@ class AnalysisOrchestrator:
         policy_sections: List[PolicyDocumentSection] = []
 
         if input_data.use_conditions and input_data.conditions_files:
-            job.update(progress=10, message="Voorwaarden verwerken...")
             num_files = len(input_data.conditions_files)
+            job.update(progress=10, message=f"Voorwaarden verwerken ({num_files} bestanden)...")
             logger.info(f"Parsing {num_files} conditions files...")
 
             with Timer(f"Parse {num_files} conditions files"):
@@ -292,6 +293,7 @@ class AnalysisOrchestrator:
                 )
 
             logger.info(f"Conditions parsed: {len(policy_sections)} total sections")
+            job.add_log(f"{len(policy_sections)} artikelen gevonden in {num_files} voorwaarden")
             phase_timer.checkpoint(f"Conditions parsed ({len(policy_sections)} sections)")
         else:
             job.update(progress=10, message="Modus: Interne analyse")
@@ -312,7 +314,7 @@ class AnalysisOrchestrator:
         log_section(logger, "SEMANTIC SERVICES INITIALIZATION")
 
         if input_data.use_semantic and container.config.semantic.enabled:
-            job.update(progress=12, message="Semantische services laden...")
+            job.update(progress=12, message="NLP-modellen laden (kan 30-60s duren bij eerste keer)...")
 
             self._factory.initialize_semantic_stack(
                 container,
@@ -382,13 +384,13 @@ class AnalysisOrchestrator:
         phase_timer: PhaseTimer
     ) -> Tuple[List[Cluster], Dict[str, str]]:
         """Phase 6: Cluster similar clauses."""
-        job.update(progress=25, message="Slim clusteren...")
+        job.update(progress=25, message=f"Clausules clusteren ({len(clauses)} teksten)...")
         log_section(logger, f"CLUSTERING ({len(clauses)} clauses)")
 
         # Progress callback for clustering (25% -> 50%)
         def clustering_progress(pct: int) -> None:
             actual_progress = 25 + int(pct * 0.25)
-            job.update(progress=actual_progress, message=f"Slim clusteren... ({pct}%)")
+            job.update(progress=actual_progress, message=f"Clausules clusteren... {pct}% ({len(clauses)} teksten)")
 
         with Timer(f"Cluster {len(clauses)} clauses"):
             clusters, clause_to_cluster = container.clustering.cluster_clauses(
@@ -398,6 +400,7 @@ class AnalysisOrchestrator:
 
         logger.info(f"Clustering complete: {len(clusters)} clusters from {len(clauses)} clauses")
         logger.info(f"   Avg cluster size: {len(clauses) / len(clusters):.1f}")
+        job.add_log(f"{len(clusters)} clusters gevormd uit {len(clauses)} teksten")
         phase_timer.checkpoint(f"Clustering ({len(clusters)} clusters)")
 
         return clusters, clause_to_cluster
@@ -412,14 +415,16 @@ class AnalysisOrchestrator:
         phase_timer: PhaseTimer
     ) -> Dict[str, AnalysisAdvice]:
         """Phase 7: Analyze clusters with 5-step waterfall pipeline."""
-        job.update(progress=50, message="Analyseren...")
+        total_clusters = len(clusters)
+        job.update(progress=50, message=f"Clusters analyseren: 0/{total_clusters}...")
 
         sections_to_use = policy_sections if use_conditions else []
 
         # Progress callback for analysis (50% -> 90%)
         def analysis_progress(pct: int) -> None:
             actual_progress = 50 + int(pct * 0.40)
-            job.update(progress=actual_progress, message=f"Analyseren... ({pct}%)")
+            done = int(pct * total_clusters / 100)
+            job.update(progress=actual_progress, message=f"Clusters analyseren: {done}/{total_clusters}")
 
         with Timer(f"Analyze {len(clusters)} clusters"):
             advice_map = container.analysis.analyze_clusters(
@@ -460,7 +465,7 @@ class AnalysisOrchestrator:
         phase_timer: PhaseTimer
     ) -> None:
         """Phase 8: Generate statistics, results, and Excel report."""
-        job.update(progress=95, message="Resultaten samenstellen...")
+        job.update(progress=95, message=f"Resultaten samenstellen ({len(clusters)} clusters)...")
 
         # Statistics
         stats = container.export.get_statistics_summary(clauses, clusters, advice_map)

@@ -116,6 +116,11 @@ export interface StartAnalysisResponse {
   status: string;
 }
 
+export interface LogMessage {
+  time: string;
+  message: string;
+}
+
 export interface JobStatusResponse {
   job_id: string;
   status: string;
@@ -130,6 +135,7 @@ export interface JobStatusResponse {
     analysis_mode: string;
     advice_distribution: Record<string, number>;
   };
+  log_messages?: LogMessage[];
 }
 
 export interface AnalysisResultsResponse {

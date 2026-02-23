@@ -129,7 +129,7 @@ class ClusteringService:
             # Log timing every 500 clauses
             if (i + 1) % 500 == 0:
                 elapsed = time.time() - clustering_start
-                logger.info(f"⏱️ CLUSTERING [{i+1}/{total}]: {elapsed:.1f}s, {len(clusters)} clusters, {fuzzy_comparisons} fuzzy comparisons")
+                logger.info(f"[TIMING] CLUSTERING [{i+1}/{total}]: {elapsed:.1f}s, {len(clusters)} clusters, {fuzzy_comparisons} fuzzy comparisons")
             
             text = clause.simplified_text
 
@@ -179,8 +179,10 @@ class ClusteringService:
                 leader_text = cluster.leader_text
 
                 # Quick length filter (skip if too different)
+                # FIXED: Symmetric calculation using max of both lengths
                 if leader_text:
-                    len_diff = abs(len(leader_text) - len(text)) / max(len(leader_text), 1)
+                    max_len = max(len(leader_text), len(text), 1)
+                    len_diff = abs(len(leader_text) - len(text)) / max_len
                     if len_diff > length_tolerance:
                         continue
 
@@ -263,7 +265,7 @@ class ClusteringService:
             progress_callback(100)
 
         clustering_time = time.time() - clustering_start
-        logger.info(f"⏱️ CLUSTERING COMPLETE: {clustering_time:.1f}s for {len(clauses)} clauses -> {len(clusters)} clusters")
+        logger.info(f"[TIMING] CLUSTERING COMPLETE: {clustering_time:.1f}s for {len(clauses)} clauses -> {len(clusters)} clusters")
         logger.info(f"   Total fuzzy comparisons: {fuzzy_comparisons} ({fuzzy_comparisons/max(1,len(clauses)):.1f} per clause)")
         logger.info(f"Created {len(clusters)} clusters from {len(clauses)} clauses")
 
@@ -271,7 +273,7 @@ class ClusteringService:
         exact_hits = sum(1 for c in clauses if c.simplified_text in exact_match_cache)
         normalized_hits = sum(1 for c in clauses if normalize_for_clustering(c.raw_text) in normalized_match_cache) - exact_hits
         logger.info(
-            f"🚀 Clustering cache hits: {len(exact_match_cache)} exact, "
+            f"[PERF] Clustering cache hits: {len(exact_match_cache)} exact, "
             f"{len(normalized_match_cache)} normalized"
         )
 

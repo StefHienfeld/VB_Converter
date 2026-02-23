@@ -7,10 +7,11 @@ background analysis jobs.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 
 class JobStatus(str, Enum):
@@ -35,11 +36,21 @@ class AnalysisJob:
     error: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.utcnow)
 
+    # Activity log (ring buffer, max 50 entries)
+    log_messages: Deque[Dict[str, str]] = field(default_factory=lambda: deque(maxlen=50))
+
     # Results (populated when job completes)
     stats: Optional[Dict[str, Any]] = None
     results: Optional[List[Dict[str, Any]]] = None
     excel_bytes: Optional[bytes] = None
     excel_filename: Optional[str] = None
+
+    def add_log(self, message: str) -> None:
+        """Add a timestamped log entry to the activity log."""
+        self.log_messages.append({
+            "time": datetime.utcnow().strftime("%H:%M:%S"),
+            "message": message,
+        })
 
     def update(
         self,
@@ -64,6 +75,7 @@ class AnalysisJob:
             self.progress = int(progress)
         if message is not None:
             self.status_message = message
+            self.add_log(message)
         if error is not None:
             self.error = error
 

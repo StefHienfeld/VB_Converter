@@ -335,7 +335,7 @@ class CustomInstructionsService:
         self._indexed = False
 
         # Summary log only
-        logger.info(f"✅ Custom instructions loaded: {len(self._instructions)} regels")
+        logger.info(f"[OK] Custom instructions loaded: {len(self._instructions)} regels")
 
         # Detailed logging at debug level
         logger.debug(f"Raw input length: {len(raw_text)} characters")
@@ -344,18 +344,18 @@ class CustomInstructionsService:
 
             # Warn if search text is very short (might be a typo)
             if len(instr.search_text) < 5:
-                logger.warning(f"    ⚠️  Search text is very short - check for typos!")
+                logger.warning(f"    [WARN] Search text is very short - check for typos!")
 
             # Warn if action is very short (might be incomplete)
             if len(instr.action) < 10:
-                logger.warning(f"    ⚠️  Action is very short - might be incomplete!")
+                logger.warning(f"    [WARN] Action is very short - might be incomplete!")
 
         # Index for semantic search if service is available
         if self._semantic_service and self._instructions:
             self._index_for_semantic_search()
 
         if len(self._instructions) == 0:
-            logger.warning("⚠️ No instructions loaded - parsing may have failed!")
+            logger.warning("[WARN] No instructions loaded - parsing may have failed!")
 
         return len(self._instructions)
     
@@ -418,7 +418,7 @@ class CustomInstructionsService:
         input_text = input_text.strip()
         input_norm = input_text.casefold()
 
-        logger.debug(f"🔍 Matching against {len(self._instructions)} instructions")
+        logger.debug(f"[MATCH] Matching against {len(self._instructions)} instructions")
         logger.debug(f"   Input text (first 150 chars): '{input_text[:150]}...'")
 
         # Fast path: simple "contains" match (customer-friendly grid use-case)
@@ -440,7 +440,7 @@ class CustomInstructionsService:
                         matched_text=input_text
                     )
                     logger.debug(
-                        f"✅ Custom instruction match (contains): '{input_text[:50]}...' -> "
+                        f"[OK] Custom instruction match (contains): '{input_text[:50]}...' -> "
                         f"'{instr.action}' (matched: '{needle}')"
                     )
                     return best_match
@@ -479,7 +479,7 @@ class CustomInstructionsService:
         
         if best_match:
             logger.debug(
-                f"✅ Custom instruction match (fuzzy/semantic): '{input_text[:50]}...' -> "
+                f"[OK] Custom instruction match (fuzzy/semantic): '{input_text[:50]}...' -> "
                 f"'{best_match.instruction.action}' (score: {best_match.score:.2f})"
             )
         else:

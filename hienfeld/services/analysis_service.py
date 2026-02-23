@@ -179,9 +179,10 @@ class AnalysisService:
 
         # Analysis pipeline (v4.5 - Strategy pattern)
         self._pipeline: Optional["AnalysisPipeline"] = None
-        # Feature flag: enabled now that strategies have full parity
-        # Disable via: analysis_service._use_pipeline = False
-        self._use_pipeline = PIPELINE_AVAILABLE
+        # Feature flag: DISABLED until pipeline issues in BALANCED/ACCURATE modes are fixed
+        # The pipeline causes hangs/failures when hybrid_similarity_service is active
+        # Enable via: analysis_service._use_pipeline = True
+        self._use_pipeline = False  # Temporarily disabled - use legacy waterfall
 
     @property
     def pipeline(self) -> Optional["AnalysisPipeline"]:
@@ -368,9 +369,9 @@ class AnalysisService:
             self.config.ai.reranking.enabled
         )
         if self._reranking_enabled:
-            logger.info("✅ LLM Reranking service configured (v4.3 uncertain match enhancement)")
+            logger.info("[OK] LLM Reranking service configured (v4.3 uncertain match enhancement)")
         elif service is not None:
-            logger.info("ℹ️ Reranking service provided but disabled in config (ai.reranking.enabled=False)")
+            logger.info("[INFO] Reranking service provided but disabled in config (ai.reranking.enabled=False)")
     
     def _index_sections_for_semantic_search(self) -> None:
         """
@@ -410,7 +411,7 @@ class AnalysisService:
             try:
                 self.semantic_similarity_service.index_texts(texts, metadata)
                 self._semantic_index_ready = True
-                logger.info(f"✅ Semantic index ready: {len(texts)} sections indexed")
+                logger.info(f"[OK] Semantic index ready: {len(texts)} sections indexed")
             except Exception as e:
                 logger.error(f"Failed to build semantic index: {e}")
                 self._semantic_index_ready = False
@@ -452,53 +453,53 @@ class AnalysisService:
                 section_texts = [s.simplified_text for s in self._policy_sections if s.simplified_text]
                 if section_texts:
                     self.hybrid_similarity_service.train_tfidf(section_texts)
-                    logger.info(f"✅ Hybrid similarity trained on {len(section_texts)} sections")
+                    logger.info(f"[OK] Hybrid similarity trained on {len(section_texts)} sections")
         else:
             self._policy_full_text = ""
-            logger.warning("⚠️ GEEN VOORWAARDEN GELADEN - Step 2 wordt overgeslagen")
+            logger.warning("[WARN] GEEN VOORWAARDEN GELADEN - Step 2 wordt overgeslagen")
         
         # Log clause library status
         if self.clause_library_service and self.clause_library_service.is_loaded:
-            logger.info(f"✅ Clause library loaded: {self.clause_library_service.clause_count} clauses")
+            logger.info(f"[OK] Clause library loaded: {self.clause_library_service.clause_count} clauses")
         else:
-            logger.warning("⚠️ GEEN CLAUSULEBIBLIOTHEEK - Step 1 wordt overgeslagen")
+            logger.warning("[WARN] GEEN CLAUSULEBIBLIOTHEEK - Step 1 wordt overgeslagen")
         
         # Log admin check status
         if self.admin_check_service:
-            logger.info("✅ Admin check service configured (Step 0 active)")
+            logger.info("[OK] Admin check service configured (Step 0 active)")
         else:
-            logger.info("ℹ️ Admin check service not configured - Step 0 wordt overgeslagen")
+            logger.info("[INFO] Admin check service not configured - Step 0 wordt overgeslagen")
         
         # Log custom instructions status (Step 0.5)
         if self.custom_instructions_service and self.custom_instructions_service.is_loaded:
-            logger.info(f"✅ Custom instructions loaded: {self.custom_instructions_service.instruction_count} regels (Step 0.5 active)")
+            logger.info(f"[OK] Custom instructions loaded: {self.custom_instructions_service.instruction_count} regels (Step 0.5 active)")
         else:
-            logger.info("ℹ️ Geen custom instructions - Step 0.5 wordt overgeslagen")
+            logger.info("[INFO] Geen custom instructions - Step 0.5 wordt overgeslagen")
         
         # Index sections for semantic search (Step 2b)
         if self.semantic_similarity_service:
             self._index_sections_for_semantic_search()
             if self._semantic_index_ready:
-                logger.info("✅ Semantic similarity enabled (Step 2b active)")
+                logger.info("[OK] Semantic similarity enabled (Step 2b active)")
             else:
-                logger.warning("⚠️ Semantic indexing failed - Step 2b wordt overgeslagen")
+                logger.warning("[WARN] Semantic indexing failed - Step 2b wordt overgeslagen")
         else:
-            logger.info("ℹ️ Semantic similarity service not configured - alleen tekstuele matching")
+            logger.info("[INFO] Semantic similarity service not configured - alleen tekstuele matching")
         
         # Log hybrid similarity status (v3.0)
         if self._hybrid_enabled:
             stats_info = self.hybrid_similarity_service.get_statistics() if hasattr(self.hybrid_similarity_service, 'get_statistics') else {}
             services_available = stats_info.get('services_available', {})
             active_methods = [k for k, v in services_available.items() if v]
-            logger.info(f"✅ Hybrid similarity enabled: {', '.join(active_methods) if active_methods else 'basic'}")
+            logger.info(f"[OK] Hybrid similarity enabled: {', '.join(active_methods) if active_methods else 'basic'}")
         else:
-            logger.info("ℹ️ Hybrid similarity not configured - using RapidFuzz only")
+            logger.info("[INFO] Hybrid similarity not configured - using RapidFuzz only")
 
         # Log LLM reranking status (v4.3)
         if self._reranking_enabled:
             rerank_config = self.config.ai.reranking
             logger.info(
-                f"✅ LLM Reranking enabled (v4.3): "
+                f"[OK] LLM Reranking enabled (v4.3): "
                 f"uncertain range [{rerank_config.uncertain_min_threshold:.0%}-{rerank_config.uncertain_max_threshold:.0%}], "
                 f"llm_weight={rerank_config.llm_weight:.0%}"
             )
@@ -509,7 +510,7 @@ class AnalysisService:
                 'avg_score_boost': 0.0
             }
         else:
-            logger.info("ℹ️ LLM Reranking not enabled - uncertain matches use similarity score only")
+            logger.info("[INFO] LLM Reranking not enabled - uncertain matches use similarity score only")
 
         advice_map: Dict[str, AnalysisAdvice] = {}
         total = len(clusters)
@@ -543,7 +544,7 @@ class AnalysisService:
                 elapsed = time.time() - analysis_start
                 avg_per_cluster = elapsed / (i + 1)
                 remaining = avg_per_cluster * (total - i - 1)
-                logger.info(f"⏱️ TIMING [{i+1}/{total}]: {elapsed:.1f}s elapsed, ~{remaining:.1f}s remaining")
+                logger.info(f"[TIMING] [{i+1}/{total}]: {elapsed:.1f}s elapsed, ~{remaining:.1f}s remaining")
                 logger.info(f"   Step times: s0={step_times['step0']:.1f}s, s0.5={step_times['step05']:.1f}s, s1={step_times['step1']:.1f}s, s2={step_times['step2']:.1f}s, s3={step_times['step3']:.1f}s")
 
         # Final progress
@@ -552,7 +553,7 @@ class AnalysisService:
 
         # Log final timing summary
         total_time = time.time() - analysis_start
-        logger.info(f"⏱️ ANALYSIS COMPLETE: {total_time:.1f}s for {total} clusters ({total_time/total*1000:.1f}ms/cluster)")
+        logger.info(f"[TIMING] ANALYSIS COMPLETE: {total_time:.1f}s for {total} clusters ({total_time/total*1000:.1f}ms/cluster)")
         logger.info(f"   STEP BREAKDOWN: Step0={step_times['step0']:.1f}s, Step0.5={step_times['step05']:.1f}s, Step1={step_times['step1']:.1f}s, Step2={step_times['step2']:.1f}s, Step3={step_times['step3']:.1f}s")
 
         # Log summary

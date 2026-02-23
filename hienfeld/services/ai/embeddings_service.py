@@ -129,7 +129,7 @@ class SentenceTransformerEmbeddingsService:
                 
                 if not model_exists:
                     logger.warning(
-                        f"⚠️ Embedding model '{self.model_name}' not found in cache. "
+                        f"[WARN] Embedding model '{self.model_name}' not found in cache. "
                         f"First download takes 5-10 minutes. Skipping embeddings for now. "
                         f"Pre-download with: python -c \"from sentence_transformers import SentenceTransformer; "
                         f"SentenceTransformer('{self.model_name}')\""

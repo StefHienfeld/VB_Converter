@@ -54,12 +54,13 @@ class AdminIssueType(Enum):
 class AnalysisAdvice:
     """
     Represents the analysis result and recommendation for a cluster.
-    
+
     Attributes:
         cluster_id: ID of the analyzed cluster
         advice_code: Recommendation code (VERWIJDEREN, SPLITSEN, etc.)
         reason: Explanation for the recommendation
-        confidence: Confidence level of the analysis
+        confidence: Confidence level of the analysis (text: Hoog/Midden/Laag)
+        confidence_score: Numeric confidence score (0.0 to 1.0)
         reference_article: Reference to policy article (e.g., "Art 2.8")
         category: Optional category classification (e.g., "FRAUDE", "MOLEST")
         cluster_name: Human-readable cluster name
@@ -69,6 +70,7 @@ class AnalysisAdvice:
     advice_code: str
     reason: str
     confidence: str
+    confidence_score: float = 0.0  # NEW: Numeric confidence (0.0 to 1.0)
     reference_article: Optional[str] = None
     category: Optional[str] = None
     cluster_name: str = ""
@@ -109,6 +111,7 @@ class AnalysisAdvice:
             'Advies': self.advice_code,
             'Reden': self.reason,
             'Vertrouwen': self.confidence,
+            'Score': round(self.confidence_score, 2) if self.confidence_score > 0 else '',
             'Artikel': self.reference_article or '-'
         }
 

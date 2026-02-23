@@ -81,6 +81,7 @@ class JobStatusResponse(BaseModel):
     status_message: str
     error: Optional[str] = None
     stats: Optional[Dict[str, Any]] = None
+    log_messages: List[Dict[str, str]] = []
 
 
 class AnalysisResultRowModel(BaseModel):
