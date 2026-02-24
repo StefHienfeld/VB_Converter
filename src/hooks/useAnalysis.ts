@@ -59,7 +59,7 @@ export interface UseAnalysisReturn {
   handleDownload: () => Promise<void>;
 }
 
-export function useAnalysis(): UseAnalysisReturn {
+export function useAnalysis(selectedLibraryId?: string | null): UseAnalysisReturn {
   const { toast } = useToast();
 
   // File upload hook
@@ -105,10 +105,10 @@ export function useAnalysis(): UseAnalysisReturn {
       return;
     }
 
-    // Warn if no conditions files uploaded
-    if (fileUpload.conditionsFiles.length === 0) {
+    // Warn if no conditions files uploaded AND no library selected
+    if (fileUpload.conditionsFiles.length === 0 && !selectedLibraryId) {
       const proceed = window.confirm(
-        "Let op: Geen voorwaarden geupload.\n\n" +
+        "Let op: Geen voorwaarden geupload en geen bibliotheek geselecteerd.\n\n" +
         "De analyse zal minder nauwkeurig zijn omdat er geen polisvoorwaarden beschikbaar zijn om mee te vergelijken.\n\n" +
         "Wilt u doorgaan zonder voorwaarden?"
       );
@@ -130,11 +130,12 @@ export function useAnalysis(): UseAnalysisReturn {
 
       const res = await startAnalysis({
         policyFile: fileUpload.policyFile,
-        conditionsFiles: fileUpload.conditionsFiles,
-        clauseLibraryFiles: fileUpload.clauseLibraryFiles,
+        conditionsFiles: selectedLibraryId ? [] : fileUpload.conditionsFiles,
+        clauseLibraryFiles: selectedLibraryId ? [] : fileUpload.clauseLibraryFiles,
         referenceFile: fileUpload.referenceFile,
         settings,
         extraInstruction: fileUpload.extraInstruction,
+        libraryId: selectedLibraryId,
       });
 
       setJobId(res.job_id);
@@ -149,7 +150,7 @@ export function useAnalysis(): UseAnalysisReturn {
         variant: "destructive",
       });
     }
-  }, [fileUpload, settings, toast, progress, polling]);
+  }, [fileUpload, settings, toast, progress, polling, selectedLibraryId]);
 
   const handleCancelAnalysis = useCallback(() => {
     polling.stopPolling();

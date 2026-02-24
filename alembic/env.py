@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Import ORM metadata so Alembic can autogenerate migrations
 from hienfeld_api.database import Base
 import hienfeld_api.models.db_models  # noqa: F401 - registers models with Base
+import hienfeld_api.models.library_models  # noqa: F401 - registers library models with Base
 
 # Alembic Config object
 config = context.config

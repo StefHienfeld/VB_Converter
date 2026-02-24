@@ -109,6 +109,7 @@ export interface StartAnalysisRequest {
     analysisMode?: string;
   };
   extraInstruction?: string;
+  libraryId?: string | null;
 }
 
 export interface StartAnalysisResponse {
@@ -191,11 +192,14 @@ function buildFormData(req: StartAnalysisRequest): FormData {
   form.append("cluster_accuracy", String(req.settings.clusterAccuracy));
   form.append("min_frequency", String(req.settings.minFrequency));
   form.append("window_size", String(req.settings.windowSize));
-  form.append("use_conditions", String(conditionsFiles.length > 0));
+  form.append("use_conditions", String(conditionsFiles.length > 0 || !!req.libraryId));
   form.append("use_window_limit", String(true));
   form.append("ai_enabled", String(req.settings.aiEnabled));
   form.append("analysis_mode", req.settings.analysisMode || "balanced");
   form.append("extra_instruction", req.extraInstruction ?? "");
+  if (req.libraryId) {
+    form.append("library_id", req.libraryId);
+  }
 
   return form;
 }
@@ -305,4 +309,113 @@ async function safeParseError(res: Response): Promise<string | null> {
     // ignore
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Library API (v5.0)
+// ---------------------------------------------------------------------------
+
+export interface LibraryInfo {
+  id: string;
+  naam: string;
+  verzekeraar: string | null;
+  versie: string | null;
+  beschrijving: string | null;
+  status: string;
+  aangemaakt_door: string;
+  aangemaakt_op: string;
+  bijgewerkt_op: string;
+  build_progress: number;
+  build_message: string | null;
+  section_count: number;
+  clause_count: number;
+}
+
+export interface LibraryBuildStatus {
+  status: string;
+  build_progress: number;
+  build_message: string | null;
+  section_count: number;
+  clause_count: number;
+}
+
+export interface LibrarySectionInfo {
+  id: string;
+  artikel_nummer: string | null;
+  artikel_titel: string | null;
+  ruwe_tekst: string;
+  sectie_type: string | null;
+  bron_bestand: string | null;
+  pagina_nummer: number | null;
+  has_embedding: boolean;
+}
+
+export async function fetchLibraries(status?: string): Promise<LibraryInfo[]> {
+  const params = status ? `?status=${status}` : "";
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/libraries${params}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Kon bibliotheken niet ophalen");
+  return res.json();
+}
+
+export async function createLibrary(data: FormData): Promise<LibraryInfo> {
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/libraries`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: data,
+  });
+  if (!res.ok) {
+    const detail = await safeParseError(res);
+    throw new Error(detail || "Kon bibliotheek niet aanmaken");
+  }
+  return res.json();
+}
+
+export async function buildLibrary(id: string, files: FormData): Promise<{ status: string; message: string }> {
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/libraries/${id}/build`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: files,
+  });
+  if (!res.ok) {
+    const detail = await safeParseError(res);
+    throw new Error(detail || "Kon build niet starten");
+  }
+  return res.json();
+}
+
+export async function fetchBuildStatus(id: string): Promise<LibraryBuildStatus> {
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/libraries/${id}/build-status`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Kon build status niet ophalen");
+  return res.json();
+}
+
+export async function fetchLibrarySections(id: string): Promise<LibrarySectionInfo[]> {
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/libraries/${id}/sections`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Kon secties niet ophalen");
+  return res.json();
+}
+
+export async function archiveLibrary(id: string): Promise<void> {
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/libraries/${id}/archive`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Kon bibliotheek niet archiveren");
+}
+
+export async function deleteLibrary(id: string): Promise<void> {
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/libraries/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const detail = await safeParseError(res);
+    throw new Error(detail || "Kon bibliotheek niet verwijderen");
+  }
 }

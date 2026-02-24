@@ -305,6 +305,7 @@ class ServiceFactory:
             admin_check_service=container.admin_check,
             custom_instructions_service=container.custom_instructions,
             reference_service=container.reference,
+            rag_service=container.rag,
         )
 
         container.analysis = service

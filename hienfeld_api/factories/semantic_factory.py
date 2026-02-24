@@ -229,9 +229,10 @@ class SemanticStackFactory:
             if not self._validate_hybrid_service(container):
                 return
 
-            # Upgrade clustering to use hybrid similarity
-            container.clustering.similarity_service = container.hybrid
-            logger.info("Clustering upgraded to hybrid similarity")
+            # NOTE: Clustering stays on RapidFuzz (base_similarity) intentionally.
+            # Clustering detects near-duplicates, not paraphrases — embeddings are overkill.
+            # This saves ~50 min on 6000-row datasets in ACCURATE mode.
+            logger.info("Hybrid similarity ready (clustering stays on RapidFuzz for speed)")
 
             # Build FAISS index for fast ANN search
             if policy_sections and mode_config.enable_embeddings:

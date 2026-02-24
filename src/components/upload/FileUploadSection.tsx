@@ -27,9 +27,13 @@ export interface FileUploadSectionProps {
   extraInstruction: string;
   onExtraInstructionChange: (value: string) => void;
 
+  // Library mode
+  librarySelected?: boolean;
+
   // Styling
   className?: string;
   isCompact?: boolean;
+  conditionsDeemphasized?: boolean;
 }
 
 export function FileUploadSection({
@@ -43,8 +47,10 @@ export function FileUploadSection({
   onReferenceUpload,
   extraInstruction,
   onExtraInstructionChange,
+  librarySelected = false,
   className,
   isCompact = false,
+  conditionsDeemphasized = false,
 }: FileUploadSectionProps) {
   return (
     <div
@@ -56,8 +62,13 @@ export function FileUploadSection({
         className
       )}
     >
-      {/* Upload Row - 4 cards horizontal */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Upload Row - cards horizontal */}
+      <div className={cn(
+        "grid gap-4",
+        librarySelected
+          ? "grid-cols-1 md:grid-cols-2 lg:grid-cols-2"
+          : "grid-cols-1 md:grid-cols-2 lg:grid-cols-4"
+      )}>
         <FileDropZone
           title="1. Polisbestand"
           description="Sleep Excel/CSV bestand"
@@ -70,39 +81,44 @@ export function FileUploadSection({
           className="animate-fade-up"
         />
 
-        <FileDropZone
-          title="2. Voorwaarden (optioneel)"
-          description="Sleep PDF/TXT/DOCX"
-          accept=".pdf,.txt,.docx"
-          onFileSelect={onConditionsUpload}
-          status={conditionsFiles.length > 0 ? "success" : "idle"}
-          multiple={true}
-          uploadedFiles={
-            conditionsFiles.length > 0
-              ? conditionsFiles.map((f) => ({ name: f.name, size: f.size }))
-              : undefined
-          }
-          className="animate-fade-up animation-delay-100"
-        />
+        {!librarySelected && (
+          <FileDropZone
+            title="2. Voorwaarden (optioneel)"
+            dimmed={conditionsDeemphasized}
+            description="Sleep PDF/TXT/DOCX"
+            accept=".pdf,.txt,.docx"
+            onFileSelect={onConditionsUpload}
+            status={conditionsFiles.length > 0 ? "success" : "idle"}
+            multiple={true}
+            uploadedFiles={
+              conditionsFiles.length > 0
+                ? conditionsFiles.map((f) => ({ name: f.name, size: f.size }))
+                : undefined
+            }
+            className="animate-fade-up animation-delay-100"
+          />
+        )}
 
-        <FileDropZone
-          title="3. Clausulebibliotheek (optioneel)"
-          description="Upload bibliotheek"
-          accept=".xlsx,.xls,.csv,.pdf,.docx,.doc"
-          onFileSelect={onClauseLibraryUpload}
-          status={clauseLibraryFiles.length > 0 ? "success" : "idle"}
-          multiple={true}
-          uploadedFiles={
-            clauseLibraryFiles.length > 0
-              ? clauseLibraryFiles.map((f) => ({ name: f.name, size: f.size }))
-              : undefined
-          }
-          className="animate-fade-up animation-delay-150"
-        />
+        {!librarySelected && (
+          <FileDropZone
+            title="3. Clausulebibliotheek (optioneel)"
+            description="Upload bibliotheek"
+            accept=".xlsx,.xls,.csv,.pdf,.docx,.doc"
+            onFileSelect={onClauseLibraryUpload}
+            status={clauseLibraryFiles.length > 0 ? "success" : "idle"}
+            multiple={true}
+            uploadedFiles={
+              clauseLibraryFiles.length > 0
+                ? clauseLibraryFiles.map((f) => ({ name: f.name, size: f.size }))
+                : undefined
+            }
+            className="animate-fade-up animation-delay-150"
+          />
+        )}
 
         {onReferenceUpload && (
           <FileDropZone
-            title="4. Referentie (optioneel)"
+            title={librarySelected ? "2. Referentie (optioneel)" : "4. Referentie (optioneel)"}
             description="Vorige VB analyse (jaar)"
             accept=".xlsx,.xls"
             onFileSelect={onReferenceUpload}

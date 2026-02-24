@@ -613,6 +613,20 @@ class ClauseLibraryService:
             'is_loaded': self._is_loaded
         }
     
+    def load_from_standard_clauses(self, clauses: list) -> int:
+        """Load pre-built StandardClause objects (e.g. from a product library).
+
+        Args:
+            clauses: List of StandardClause domain objects.
+
+        Returns:
+            Number of clauses loaded.
+        """
+        self._clauses.extend(clauses)
+        self._is_loaded = len(self._clauses) > 0
+        logger.info("Loaded %d clauses from pre-built list. Total: %d", len(clauses), len(self._clauses))
+        return len(clauses)
+
     @property
     def is_loaded(self) -> bool:
         """Check if a clause library has been loaded."""

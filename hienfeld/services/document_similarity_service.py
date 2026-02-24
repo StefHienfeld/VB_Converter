@@ -79,6 +79,24 @@ class DocumentSimilarityService:
         """Check if model has been trained on a corpus."""
         return self._is_trained
 
+    def set_precomputed(self, vectorizer, matrix, corpus_texts=None) -> None:
+        """
+        Set a pre-computed TF-IDF vectorizer and matrix (from a product library).
+
+        Args:
+            vectorizer: A fitted sklearn TfidfVectorizer
+            matrix: The corresponding TF-IDF sparse matrix
+            corpus_texts: Optional list of corpus texts (for debugging)
+        """
+        if not self._available:
+            self._init_sklearn()
+
+        self._vectorizer = vectorizer
+        self._corpus_tfidf = matrix
+        self._corpus_texts = corpus_texts or []
+        self._is_trained = True
+        logger.info("TF-IDF loaded from pre-computed library data (%d docs)", matrix.shape[0])
+
     def train_on_corpus(self, documents: List[str]) -> None:
         """
         Train TF-IDF model on a corpus of documents.

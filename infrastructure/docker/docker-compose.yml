@@ -10,6 +10,22 @@ version: '3.8'
 # =============================================================================
 
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: hienfeld
+      POSTGRES_USER: hienfeld
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-hienfeld_dev}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hienfeld"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - vb-network
+
   backend:
     build:
       context: ../..
@@ -25,6 +41,11 @@ services:
       - LOG_FORMAT=text
       - ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000,http://localhost:80
       - RATE_LIMIT_ENABLED=false
+      - DATABASE_URL=postgresql://hienfeld:${DB_PASSWORD:-hienfeld_dev}@db:5432/hienfeld
+      - PRELOAD_MODELS=true
+    depends_on:
+      db:
+        condition: service_healthy
     volumes:
       # Mount source for hot reload in development
       - ../../hienfeld:/app/hienfeld:ro
@@ -39,6 +60,7 @@ services:
     networks:
       - vb-network
     restart: unless-stopped
+    command: ["./start.sh"]
 
   frontend:
     build:
@@ -60,6 +82,8 @@ services:
 
 volumes:
   upload_data:
+    driver: local
+  pgdata:
     driver: local
 
 networks:

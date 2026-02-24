@@ -24,7 +24,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **pandas** - Data processing (CSV/Excel)
 - **RapidFuzz** - Fast fuzzy string matching
 - **SpaCy** (nl_core_news_md) - NLP lemmatization
-- **Gensim** - TF-IDF document similarity
+- **scikit-learn** - TF-IDF document similarity
 - **sentence-transformers** - Semantic embeddings
 - **PyMuPDF/pdfplumber** - PDF parsing
 - **python-docx** - DOCX parsing
@@ -36,7 +36,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install dependencies
 npm install
 
-# Start dev server (http://localhost:8080)
+# Start dev server (http://localhost:8081)
 npm run dev
 
 # Build for production
@@ -125,7 +125,7 @@ The analysis flows through 6 main stages:
   - Reduces cluster count by 70-80% without quality loss
   - Example: UNIEK-VERWIJDEREN-Hoog (80 texts), UNIEK-HANDMATIG CHECKEN-Midden (280 texts)
   - Individual analyses preserved, only presentation grouped
-  - See `UNIEKE_TEKSTEN_FEATURE.md` for details
+  - See clustering logic in `hienfeld/services/clustering_service.py` for details
 - Includes Status column for manual tracking
 - Semantic cluster names via NLP noun phrase extraction
 - Article titles included in references (max 80 chars)

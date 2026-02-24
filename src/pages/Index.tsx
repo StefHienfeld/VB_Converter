@@ -14,13 +14,18 @@ import { ResultsTable } from "@/components/results/ResultsTable";
 import { SettingsDrawer } from "@/components/settings/SettingsDrawer";
 import { HelpDialog } from "@/components/help/HelpDialog";
 import { useAnalysis } from "@/hooks/useAnalysis";
+import { LibrarySelector } from "@/components/library/LibrarySelector";
+import { type LibraryInfo } from "@/lib/api";
+import { Link } from "react-router-dom";
+import { Library } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const Index = () => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
 
-  const analysis = useAnalysis();
+  const [selectedLibrary, setSelectedLibrary] = useState<LibraryInfo | null>(null);
+  const analysis = useAnalysis(selectedLibrary?.id);
 
   return (
     <div className="min-h-screen bg-background relative">
@@ -37,8 +42,19 @@ const Index = () => {
       />
 
       <main className="container max-w-7xl mx-auto px-4 pb-12 relative z-10">
+        <div className="flex justify-end mb-2">
+          <Link to="/libraries" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors">
+            <Library className="w-3.5 h-3.5" />
+            Bibliotheken beheren
+          </Link>
+        </div>
         {/* Input Section */}
         <div className="transition-all duration-700 ease-in-out">
+          <LibrarySelector
+            selectedLibraryId={selectedLibrary?.id ?? null}
+            onSelect={setSelectedLibrary}
+            className="mb-4 animate-fade-up"
+          />
           <FileUploadSection
             policyFile={analysis.policyFile}
             onPolicyUpload={analysis.handlePolicyUpload}
@@ -50,7 +66,9 @@ const Index = () => {
             onReferenceUpload={analysis.handleReferenceUpload}
             extraInstruction={analysis.extraInstruction}
             onExtraInstructionChange={analysis.setExtraInstruction}
+            librarySelected={selectedLibrary !== null}
             isCompact={analysis.inputView === "compact"}
+            conditionsDeemphasized={selectedLibrary !== null}
           />
 
           <AnalysisActions

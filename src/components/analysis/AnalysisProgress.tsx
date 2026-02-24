@@ -180,8 +180,8 @@ export const AnalysisProgress = ({
         {/* Status message */}
         <div className="flex items-center justify-between mt-2">
           <p className={cn(
-            "text-sm",
-            currentMessage ? "text-foreground" : "text-muted-foreground italic"
+            "text-sm truncate max-w-[90%]",
+            currentMessage ? "text-foreground font-medium" : "text-muted-foreground italic"
           )}>
             {currentMessage || (shouldPulse ? "Even geduld..." : "Klaar om te starten")}
           </p>
@@ -243,8 +243,8 @@ export const AnalysisProgress = ({
       {logMessages.length > 0 && (
         <div className="mt-4 pt-4 border-t border-border/50">
           <h4 className="text-xs font-medium text-muted-foreground mb-2">Activiteit</h4>
-          <div className="max-h-[140px] overflow-y-auto rounded-md bg-muted/30 p-2 space-y-0.5">
-            {logMessages.slice(-10).map((log, i, arr) => (
+          <div className="max-h-[280px] overflow-y-auto rounded-md bg-muted/30 p-2 space-y-0.5">
+            {logMessages.slice(-25).map((log, i, arr) => (
               <div
                 key={`${log.time}-${i}`}
                 className={cn(

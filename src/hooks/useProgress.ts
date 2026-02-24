@@ -7,10 +7,14 @@ import { ProgressStep } from "@/types/job";
 import { JobStatusResponse, LogMessage } from "@/lib/api";
 
 const DEFAULT_STEPS: ProgressStep[] = [
-  { id: "1", label: "Bestanden inlezen", status: "pending" },
-  { id: "2", label: "Clusteren", status: "pending" },
-  { id: "3", label: "Analyseren", status: "pending" },
-  { id: "4", label: "Resultaten genereren", status: "pending" },
+  { id: "1", label: "Configuratie laden", status: "pending" },
+  { id: "2", label: "Bestand inlezen", status: "pending" },
+  { id: "3", label: "Voorwaarden parsen", status: "pending" },
+  { id: "4", label: "NLP-modellen laden", status: "pending" },
+  { id: "5", label: "Data voorbereiden", status: "pending" },
+  { id: "6", label: "Clusteren", status: "pending" },
+  { id: "7", label: "Analyseren", status: "pending" },
+  { id: "8", label: "Resultaten genereren", status: "pending" },
 ];
 
 export interface UseProgressReturn {
@@ -109,6 +113,17 @@ export function useProgress(): UseProgressReturn {
       setCurrentMessage(msg);
     }
 
+    // Progress → step mapping (matches backend orchestrator phases):
+    // Phase 1: Configuratie (0-5%)
+    // Phase 2: Bestand inlezen (5-10%)
+    // Phase 3: Voorwaarden parsen (10-12%)
+    // Phase 4: NLP-modellen laden (12-22%)
+    // Phase 5: Data voorbereiden (22-25%)
+    // Phase 6: Clusteren (25-50%)
+    // Phase 7: Analyseren (50-90%)
+    // Phase 8: Resultaten genereren (90-100%)
+    const thresholds = [5, 10, 12, 22, 25, 50, 90, 100];
+
     setProgressSteps((prev) =>
       prev.map((step, idx) => {
         // Als job nog pending of net running is, eerste stap actief
@@ -118,35 +133,12 @@ export function useProgress(): UseProgressReturn {
             : { ...step, status: "pending" as const };
         }
 
-        if (p >= 95) {
-          return { ...step, status: "completed" as const };
-        }
+        const completedAt = thresholds[idx];
+        const activeAt = idx === 0 ? 0 : thresholds[idx - 1];
 
-        // Stap 1: Bestanden inlezen (0-25%)
-        if (idx === 0) {
-          if (p >= 25) return { ...step, status: "completed" as const };
-          if (p >= 0) return { ...step, status: "active" as const };
-        }
-
-        // Stap 2: Clusteren (25-50%) - Backend doet dit eerst!
-        if (idx === 1) {
-          if (p >= 50) return { ...step, status: "completed" as const };
-          if (p >= 25) return { ...step, status: "active" as const };
-        }
-
-        // Stap 3: Analyseren (50-90%) - Backend doet dit na clustering
-        if (idx === 2) {
-          if (p >= 90) return { ...step, status: "completed" as const };
-          if (p >= 50) return { ...step, status: "active" as const };
-        }
-
-        // Stap 4: Resultaten genereren (90-100%)
-        if (idx === 3) {
-          if (p >= 100) return { ...step, status: "completed" as const };
-          if (p >= 90) return { ...step, status: "active" as const };
-        }
-
-        return step;
+        if (p >= completedAt) return { ...step, status: "completed" as const };
+        if (p >= activeAt) return { ...step, status: "active" as const };
+        return { ...step, status: "pending" as const };
       })
     );
   }, []);

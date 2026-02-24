@@ -43,7 +43,7 @@ class TestSettingsDefaults:
     def test_default_app_version(self):
         """Test default app version."""
         settings = Settings()
-        assert settings.app_version == "3.1.0"
+        assert settings.app_version == "4.2.0"
 
     def test_default_environment(self):
         """Test default environment."""

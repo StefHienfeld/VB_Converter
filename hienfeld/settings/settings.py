@@ -38,7 +38,7 @@ class Settings(BaseSettings):
 
     # === Application ===
     app_name: str = "VB_Converter"
-    app_version: str = "3.1.0"
+    app_version: str = "4.2.0"
     environment: Environment = Environment.DEVELOPMENT
     debug: bool = True
 

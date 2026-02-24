@@ -113,7 +113,8 @@ class AnalysisService:
         admin_check_service=None,
         custom_instructions_service=None,
         reference_service=None,
-        reranking_service=None
+        reranking_service=None,
+        rag_service=None,
     ):
         """
         Initialize the analysis service.
@@ -129,6 +130,7 @@ class AnalysisService:
             custom_instructions_service: Service for user-defined custom rules (Step 0.5)
             reference_service: Service for reference analysis comparison (yearly vs monthly)
             reranking_service: Optional ReRankingService for LLM-based reranking (v4.3)
+            rag_service: Optional RAGService for vector-based section retrieval (v5.0)
         """
         self.config = config
         self.ai_analyzer = ai_analyzer
@@ -136,6 +138,7 @@ class AnalysisService:
         self.admin_check_service = admin_check_service
         self.custom_instructions_service = custom_instructions_service
         self.reference_service = reference_service
+        self.rag_service = rag_service
 
         # Similarity service for comparing against conditions (text-based)
         if similarity_service is None:
@@ -729,9 +732,13 @@ class AnalysisService:
         # ============================================================
         # STEP 2: POLICY CONDITIONS CHECK
         # Check if text is covered by conditions -> DELETE
+        # v5.0: Use RAG retrieval (top-5 candidates) when available
         # ============================================================
         t2 = time.time()
-        conditions_advice = self._step2_conditions_check(cluster)
+        if self.rag_service and self.rag_service.is_ready():
+            conditions_advice = self._step2_conditions_check_rag(cluster)
+        else:
+            conditions_advice = self._step2_conditions_check(cluster)
         if conditions_advice:
             stats['step2_conditions_match'] += 1
             if step_times: step_times['step2'] += time.time() - t2
@@ -972,6 +979,160 @@ class AnalysisService:
         
         return None
     
+    def _step2_conditions_check_rag(self, cluster: Cluster) -> Optional[AnalysisAdvice]:
+        """
+        STEP 2 (RAG): Vector-based conditions check (v5.0).
+
+        Instead of brute-force comparison against ALL policy sections,
+        uses FAISS vector search to retrieve the top-5 most similar
+        sections, then runs hybrid matching only against those candidates.
+
+        This reduces comparisons from N (all sections) to 5, giving
+        ~80x speedup for large libraries (400+ sections).
+
+        Falls back to the classic _step2_conditions_check if RAG retrieval
+        returns no candidates (e.g. very short/unusual text).
+        """
+        if not self._policy_sections:
+            return None
+
+        simple_text = cluster.leader_text
+        if not simple_text or len(simple_text) < 20:
+            return None
+
+        # Strategy 1: Exact substring match (same as classic, very fast)
+        if self._policy_full_text and simple_text in self._policy_full_text:
+            matching_section = self._find_matching_section(simple_text)
+            if matching_section:
+                return AnalysisAdvice(
+                    cluster_id=cluster.id,
+                    advice_code=AdviceCode.VERWIJDEREN.value,
+                    reason="Tekst komt EXACT voor in de voorwaarden. Kan verwijderd worden.",
+                    confidence=ConfidenceLevel.HOOG.value,
+                    reference_article=self._format_section_reference(matching_section),
+                    category="CONDITIONS_EXACT",
+                    cluster_name=cluster.name,
+                    frequency=cluster.frequency,
+                )
+
+        # Strategy 2: RAG retrieval → top-5 candidates → hybrid match
+        try:
+            candidates = self.rag_service.retrieve_relevant_sections(
+                simple_text, top_k=5, rerank=False
+            )
+        except Exception as exc:
+            logger.warning("RAG retrieval failed, falling back to classic: %s", exc)
+            return self._step2_conditions_check(cluster)
+
+        if not candidates:
+            # RAG found nothing — still try fragment/semantic fallback
+            return self._step2_conditions_check(cluster)
+
+        # Map RAG results back to PolicyDocumentSection objects
+        best_score = 0.0
+        best_section = None
+
+        for hit in candidates:
+            hit_id = hit.get("id", "")
+            section = self._policy_section_lookup.get(hit_id)
+            if not section or not section.simplified_text:
+                continue
+
+            # Compute fine-grained similarity (hybrid or RapidFuzz)
+            if self._hybrid_enabled and self.hybrid_similarity_service:
+                score = self.hybrid_similarity_service.similarity(
+                    simple_text, section.simplified_text
+                )
+            else:
+                score = self.similarity_service.similarity(
+                    simple_text, section.simplified_text
+                )
+
+            # Substring bonus
+            if simple_text in section.simplified_text:
+                substring_score = min(
+                    1.0, 0.95 + (len(simple_text) / len(section.simplified_text)) * 0.05
+                )
+                score = max(score, substring_score)
+
+            # LLM reranking for uncertain range
+            score = self._apply_llm_reranking(
+                simple_text, section.simplified_text, score
+            )
+
+            if score > best_score:
+                best_score = score
+                best_section = section
+
+        # Apply same threshold logic as classic Step 2
+        if best_section and best_score >= 0.50:
+            section_ref = self._format_section_reference(best_section)
+
+            if best_score >= self.EXACT_MATCH_THRESHOLD:
+                return AnalysisAdvice(
+                    cluster_id=cluster.id,
+                    advice_code=AdviceCode.VERWIJDEREN.value,
+                    reason=f"Tekst komt bijna letterlijk voor in voorwaarden ({int(best_score*100)}% match). Kan verwijderd worden.",
+                    confidence=ConfidenceLevel.HOOG.value,
+                    reference_article=section_ref,
+                    category="CONDITIONS_NEAR_EXACT",
+                    cluster_name=cluster.name,
+                    frequency=cluster.frequency,
+                )
+            elif best_score >= self.HIGH_SIMILARITY_THRESHOLD:
+                return AnalysisAdvice(
+                    cluster_id=cluster.id,
+                    advice_code=AdviceCode.VERWIJDEREN.value,
+                    reason=f"Tekst lijkt sterk op {section_ref} ({int(best_score*100)}% match). Controleer en verwijder indien identiek.",
+                    confidence=ConfidenceLevel.MIDDEN.value,
+                    reference_article=section_ref,
+                    category="CONDITIONS_HIGH_SIMILARITY",
+                    cluster_name=cluster.name,
+                    frequency=cluster.frequency,
+                )
+            elif best_score >= self.MEDIUM_SIMILARITY_THRESHOLD:
+                return AnalysisAdvice(
+                    cluster_id=cluster.id,
+                    advice_code=AdviceCode.HANDMATIG_CHECKEN.value,
+                    reason=f"Vertoont gelijkenis met {section_ref} ({int(best_score*100)}% match). Controleer of dit een variant is.",
+                    confidence=ConfidenceLevel.LAAG.value,
+                    reference_article=section_ref,
+                    category="CONDITIONS_MEDIUM_SIMILARITY",
+                    cluster_name=cluster.name,
+                    frequency=cluster.frequency,
+                )
+            else:
+                return AnalysisAdvice(
+                    cluster_id=cluster.id,
+                    advice_code=AdviceCode.HANDMATIG_CHECKEN.value,
+                    reason=f"Mogelijke overlap met {section_ref} ({int(best_score*100)}% semantische match). Controleer of betekenis identiek is.",
+                    confidence=ConfidenceLevel.LAAG.value,
+                    reference_article=section_ref,
+                    category="CONDITIONS_SEMANTIC_MATCH",
+                    cluster_name=cluster.name,
+                    frequency=cluster.frequency,
+                )
+
+        # Strategy 3+4: Fragment and semantic check (same as classic fallback)
+        fragment_result = self._check_significant_fragments(simple_text)
+        if fragment_result and fragment_result.get("match_found"):
+            return AnalysisAdvice(
+                cluster_id=cluster.id,
+                advice_code=AdviceCode.VERWIJDEREN.value,
+                reason=fragment_result["reason"],
+                confidence=ConfidenceLevel.MIDDEN.value,
+                reference_article=fragment_result["reference_article"],
+                category="CONDITIONS_FRAGMENTS",
+                cluster_name=cluster.name,
+                frequency=cluster.frequency,
+            )
+
+        semantic_advice = self._step2b_semantic_check(cluster)
+        if semantic_advice:
+            return semantic_advice
+
+        return None
+
     def _step2b_semantic_check(self, cluster: Cluster) -> Optional[AnalysisAdvice]:
         """
         STEP 2b: Semantic similarity check.

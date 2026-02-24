@@ -23,6 +23,7 @@ Run locally (example):
 from __future__ import annotations
 
 import asyncio
+import os
 import logging
 import time
 import uuid
@@ -49,6 +50,7 @@ from hienfeld_api.models import (
 from hienfeld_api.repositories import MemoryJobRepository, SQLJobRepository
 from hienfeld_api.middleware import setup_security, limiter
 from hienfeld_api.routes import health_router
+from hienfeld_api.routes.library_routes import library_router, init_library_routes
 from hienfeld_api.routes.auth import auth_router
 from hienfeld_api.auth import get_current_user_dependency
 from hienfeld_api.orchestrators import AnalysisOrchestrator, AnalysisInput
@@ -62,6 +64,11 @@ from hienfeld.services.ingestion_service import IngestionService
 from hienfeld.services.similarity_service import RapidFuzzSimilarityService
 from hienfeld.services.custom_instructions_service import CustomInstructionsService
 from hienfeld_api.audit_service import AuditService
+
+# In-memory cache for active jobs so status endpoint can read real-time progress.
+# When using SQLJobRepository, job.update() only modifies the in-memory object;
+# the database is written once at the end. This dict bridges that gap.
+_live_jobs: Dict[str, AnalysisJob] = {}
 
 # Prometheus metrics
 from hienfeld_api.metrics import (
@@ -94,9 +101,8 @@ except Exception:
 # Load environment settings
 settings = get_settings()
 
-# Create shared orchestrator instance
+# Create shared service factory (orchestrator created after library service init below)
 service_factory = ServiceFactory()
-orchestrator = AnalysisOrchestrator(service_factory=service_factory)
 
 # ---------------------------------------------------------------------------
 # Job repository (declared early so lifespan can access it)
@@ -148,6 +154,20 @@ _db_session_factory = None
 job_repository = _create_job_repository()
 audit_service = AuditService(session_factory=_db_session_factory)
 
+# Initialize library service (uses same database session factory)
+_library_service = None
+if _db_session_factory:
+    from hienfeld.services.library_service import LibraryService
+    _library_service = LibraryService(session_factory=_db_session_factory)
+    init_library_routes(_library_service)
+    logger.info("Library service initialized")
+
+# Create shared orchestrator instance (after library service so it can be injected)
+orchestrator = AnalysisOrchestrator(
+    service_factory=service_factory,
+    library_service=_library_service,
+)
+
 # ---------------------------------------------------------------------------
 # GDPR background cleanup task (every 30 min, removes jobs > 24h old)
 # ---------------------------------------------------------------------------
@@ -176,6 +196,28 @@ async def lifespan(app: FastAPI):
     global _cleanup_task
     _cleanup_task = asyncio.create_task(_periodic_job_cleanup())
     logger.info("GDPR job cleanup task started (interval: 30 min, TTL: 24h)")
+    # v5.0: Pre-load NLP models if PRELOAD_MODELS=true (Docker production)
+    if os.getenv("PRELOAD_MODELS", "false").lower() == "true":
+        logger.info("Pre-loading NLP models for warm startup...")
+        try:
+            from hienfeld.services.service_cache import get_service_cache
+            cache = get_service_cache()
+
+            # SpaCy (15-20 sec)
+            from hienfeld.services.nlp_service import NLPService
+            from hienfeld.config import load_config
+            _preload_config = load_config()
+            cache.get_or_create('nlp_service', lambda: NLPService(_preload_config))
+            logger.info("SpaCy model loaded")
+
+            # Sentence-transformers (20-30 sec)
+            from hienfeld.services.ai.embeddings_service import SentenceTransformerEmbeddingsService
+            cache.get_or_create('embeddings_service', lambda: SentenceTransformerEmbeddingsService(_preload_config))
+            logger.info("Embeddings model loaded")
+
+            logger.info("All models pre-loaded and warm")
+        except Exception as e:
+            logger.warning("Model pre-loading failed (non-fatal): %s", e)
     yield
     if _cleanup_task:
         _cleanup_task.cancel()
@@ -221,6 +263,9 @@ _require_auth = get_current_user_dependency(settings)
 # Health check routes (for Docker/K8s) — public, no auth
 app.include_router(health_router, prefix="/api")
 
+# Library management routes (auth applied at router level)
+app.include_router(library_router, prefix="/api", dependencies=[Depends(_require_auth)])
+
 if settings.auth_enabled:
     logger.info("JWT authentication ENABLED (AUTH_ENABLED=true)")
 
@@ -251,10 +296,61 @@ def _run_analysis_job(
     - ServiceFactory: Creates and configures services
     - ServiceContainer: Holds all service instances
     """
+    import sys
+    import traceback
+
+    # Force-flush print so it always appears in the console, regardless of
+    # logger configuration issues in background threads.
+    print(f"[ANALYSIS] Background task started for job {job_id}", flush=True)
+
+    try:
+        _run_analysis_job_inner(job_id, policy_bytes, policy_filename,
+                                conditions_files, clause_library_files,
+                                reference_file, settings)
+    except Exception as exc:
+        # Catch-all: ensure the error is ALWAYS visible in the console
+        print(f"[ANALYSIS] FATAL ERROR in job {job_id}: {exc}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        # Mark job as failed if it's in the live cache
+        job = _live_jobs.get(job_id)
+        if job and job.status != JobStatus.FAILED:
+            job.update(
+                status=JobStatus.FAILED,
+                progress=0,
+                message="Analyse mislukt (onverwachte fout)",
+                error=str(exc),
+            )
+            try:
+                job_repository.save(job)
+            except Exception:
+                pass
+    finally:
+        _live_jobs.pop(job_id, None)
+
+
+def _run_analysis_job_inner(
+    job_id: str,
+    policy_bytes: bytes,
+    policy_filename: str,
+    conditions_files: List[tuple[bytes, str]],
+    clause_library_files: List[tuple[bytes, str]],
+    reference_file: Optional[tuple[bytes, str]],
+    settings: Dict[str, Any],
+) -> None:
+    """Inner implementation — may raise exceptions caught by the outer wrapper."""
     job = job_repository.get(job_id)
     if not job:
         logger.error(f"Job {job_id} not found when starting analysis")
         return
+
+    # Register job in live cache so status endpoint can read real-time progress.
+    # Without this, SQLJobRepository.get() returns stale data from the DB
+    # because job.update() only modifies the in-memory object.
+    _live_jobs[job_id] = job
+
+    print(f"[ANALYSIS] Job {job_id[:8]} loaded, starting pipeline "
+          f"(file={policy_filename}, mode={settings.get('analysis_mode', 'balanced')}, "
+          f"library_id={settings.get('library_id')})", flush=True)
 
     # Create input data object
     input_data = AnalysisInput(
@@ -278,6 +374,8 @@ def _run_analysis_job(
         # CRITICAL: Save updated job to database after orchestrator completes
         job_repository.save(job)
         duration = time.monotonic() - start_time
+        print(f"[ANALYSIS] Job {job_id[:8]} finished in {duration:.1f}s "
+              f"(status={job.status})", flush=True)
         if job.status == JobStatus.COMPLETED:
             audit_service.log_analysis_completed(job_id, "system", int(duration), analysis_mode)
             # Record metrics: analysis completed
@@ -287,8 +385,12 @@ def _run_analysis_job(
             audit_service.log_analysis_failed(job_id, "system", int(duration), analysis_mode)
             record_analysis_error("processing")
     except Exception as exc:
+        print(f"[ANALYSIS] Job {job_id[:8]} EXCEPTION: {exc}", flush=True)
         # Save job state (likely FAILED from orchestrator error handling)
-        job_repository.save(job)
+        try:
+            job_repository.save(job)
+        except Exception as save_exc:
+            print(f"[ANALYSIS] FAILED to save job state: {save_exc}", flush=True)
         duration = time.monotonic() - start_time
         audit_service.log_analysis_failed(job_id, "system", int(duration), analysis_mode)
         # Record metrics: analysis error
@@ -348,6 +450,7 @@ async def start_analysis(
     ai_enabled: bool = Form(False),  # reserved for future AI extensions
     analysis_mode: str = Form("balanced"),  # fast, balanced, or accurate
     extra_instruction: str = Form(""),
+    library_id: Optional[str] = Form(None),  # v5.0: use product library instead of conditions upload
 ) -> StartAnalysisResponse:
     """
     Start a new analysis job.
@@ -432,6 +535,7 @@ async def start_analysis(
         "ai_enabled": ai_enabled,
         "analysis_mode": validated["analysis_mode"],
         "extra_instruction": validated["extra_instruction"],
+        "library_id": library_id or None,  # v5.0: normalize "" to None
     }
 
     background_tasks.add_task(
@@ -459,7 +563,10 @@ async def get_status(
     _current_user: str = Depends(_require_auth),
 ) -> JobStatusResponse:
     """Return status/progress for a given analysis job."""
-    job = job_repository.get(job_id)
+    # Check live cache first for real-time progress of active jobs.
+    # SQLJobRepository.get() returns stale DB data; the live cache holds
+    # the actual in-memory object being updated by the background task.
+    job = _live_jobs.get(job_id) or job_repository.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job niet gevonden")
 
@@ -485,7 +592,7 @@ async def get_results(
 
     If the job has not completed yet, returns HTTP 202.
     """
-    job = job_repository.get(job_id)
+    job = _live_jobs.get(job_id) or job_repository.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job niet gevonden")
 
@@ -515,7 +622,7 @@ async def download_report(
     """
     Download the Excel rapport for a completed job.
     """
-    job = job_repository.get(job_id)
+    job = _live_jobs.get(job_id) or job_repository.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job niet gevonden")
 

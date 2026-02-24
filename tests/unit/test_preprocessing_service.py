@@ -254,9 +254,9 @@ class TestEmptyClauseFiltering:
     def test_filter_empty_clauses_removes_empty(self, preprocessing_service, config):
         """Filter removes clauses with empty text."""
         clauses = [
-            Clause(id="c1", raw_text="Dekking auto", simplified_text="dekking auto"),
+            Clause(id="c1", raw_text="Dekking auto verzekering", simplified_text="dekking auto verzekering"),
             Clause(id="c2", raw_text="", simplified_text=""),
-            Clause(id="c3", raw_text="Brand", simplified_text="brand")
+            Clause(id="c3", raw_text="Brand uitsluiting", simplified_text="brand uitsluiting")
         ]
 
         filtered = preprocessing_service.filter_empty_clauses(clauses)
@@ -456,8 +456,8 @@ class TestIntegration:
         df = pd.DataFrame({
             "tekst": [
                 "This is a longer clause with more content",
-                "Short",
                 "Medium clause text",
+                "Brand uitsluiting dekking",
                 ""  # Empty clause
             ]
         })
