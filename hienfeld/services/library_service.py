@@ -1,6 +1,6 @@
 """Service for managing product libraries."""
 from __future__ import annotations
-import json, uuid
+import json, pickle, uuid
 from datetime import datetime, timezone
 from typing import Callable, List, Optional, Tuple
 import numpy as np
